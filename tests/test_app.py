@@ -202,8 +202,11 @@ def test_michigan_kickoff_tbd_then_official_time_updates():
     assert not announced[0]["all_day"]
     assert (announced[0]["start"].hour, announced[0]["start"].minute) == (15, 30)
     assert app.event_time_label(announced[0]) == "3:30 PM"
-    assert any(slot["time"] == "12:30 PM – 3:30 PM"
-               for slot in app.generate_schedule(announced, app.BASE, 5))
+    game_plan = app.generate_schedule(announced, app.BASE, 5)
+    assert any(slot["time"] == "12:30 PM – 2:45 PM"
+               for slot in game_plan)
+    assert any(slot["time"] == "5:30 PM onward"
+               for slot in game_plan)
 
 
 def test_official_schedule_clock_explicit_not_midnight_guessed():
@@ -296,3 +299,63 @@ def test_graphite_native_theme_avoids_blue():
     assert '#CFCAC1' in config
     assert '#84C0FF' not in config
     assert "ROADMAP_VIEWS" not in config
+
+
+
+def test_saturday_330_game_recommends_drive_rest_and_return():
+    game = app.event_record("Michigan Football vs. Penn State", "Michigan Stadium",
+                            "2026-10-17T15:30:00-04:00", None, "U-M Athletics")
+    slots = app.generate_schedule([game], app.BASE, 5)
+    assert [x["time"] for x in slots] == [
+        "12:30 PM – 2:45 PM", "2:45 PM – 5:30 PM", "5:30 PM onward"]
+    assert [app.roadmap_title(x) for x in slots] == [
+        "Recommended pregame drive", "Head home & recharge", "Recommended return shift"]
+    assert [x["app"] for x in slots] == ["Delivery", "Break / Reset", "XL / Comfort"]
+    assert "2100 Arbor Circle E" in slots[1]["action"]
+    assert "no surge is guaranteed" in slots[2]["action"].lower()
+    assert [x["start_minute"] for x in slots] == sorted(x["start_minute"] for x in slots)
+    assert len(app.filter_roadmap(slots, "Driving")) == 3
+    assert app.filter_roadmap(slots, "Traffic & events") == []
+
+
+def test_game_day_preference_can_adjust_stop_time_and_return():
+    game = app.event_record("Michigan Football vs. Penn State", "Michigan Stadium",
+                            "2026-10-17T15:30:00-04:00", None, "U-M Athletics")
+    slots = app.generate_schedule([game], app.BASE, 5,
+                                  stop_buffer_minutes=60, return_after_hours=2.5)
+    assert slots[0]["time"] == "12:30 PM – 2:30 PM"
+    assert slots[1]["time"] == "2:30 PM – 6:00 PM"
+    assert slots[2]["time"] == "6:00 PM onward"
+    unplanned = app.generate_schedule([game], app.BASE, 5, smart_game_day=False)
+    assert any(x["time"] == "5:00 PM – 8:00 PM" for x in unplanned)
+    assert any(x["time"] == "12:30 PM – 3:30 PM" for x in unplanned)
+
+
+def test_tbd_or_away_game_does_not_create_split_shift():
+    tbd = app.event_record("Michigan Football vs. Penn State", "Michigan Stadium",
+                           "2026-10-17", None, "U-M Athletics", all_day=True)
+    unknown = app.generate_schedule([tbd], app.BASE, 5)
+    assert not any(x["app"] == "Break / Reset" for x in unknown)
+    assert unknown[-1]["time"].startswith("Kickoff TBD")
+    away = app.event_record("Michigan Football vs. Penn State", "Penn State Stadium",
+                            "2026-10-17T15:30:00-04:00", None, "Fixture")
+    assert not app.is_confirmed_michigan_home_game(away)
+    assert not app.is_confirmed_michigan_home_game(tbd)
+
+
+def test_early_kickoff_return_waits_until_afternoon():
+    game = app.event_record("Michigan Football vs. Rival", "Michigan Stadium",
+                            "2026-10-17T12:00:00-04:00", None, "U-M")
+    slots = app.generate_schedule([game], app.BASE, 5)
+    assert slots[0]["time"] == "9:00 AM – 11:15 AM"
+    assert slots[1]["time"] == "11:15 AM – 3:00 PM"
+    assert slots[2]["time"] == "3:00 PM onward"
+
+
+def test_preserve_sidebar_and_support_minimal_toolbar():
+    from pathlib import Path
+    config = Path(".streamlit/config.toml").read_text()
+    assert 'toolbarMode = "minimal"' in config
+    assert 'data-testid="stToolbar"' in app.MIDNIGHT_CSS
+    assert 'data-testid="stHeader"' in app.MIDNIGHT_CSS
+    assert 'data-testid="stSidebar"' in app.MIDNIGHT_CSS

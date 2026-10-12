@@ -587,10 +587,74 @@ def event_time_label(event):
     return clock(event["start"])
 
 
-def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True, include_local=True):
+def is_confirmed_michigan_home_game(event):
+    """A published local football kickoff; never use inferred midnight for TBDs."""
+    return (not event["all_day"] and event["tier"] == "CRITICAL IMPACT"
+            and "michigan football" in event["name"].lower()
+            and "michigan stadium" in event["venue"].lower())
+
+
+def game_day_blocks(event, base_camp, *, stop_buffer_minutes=45, return_after_hours=2.0):
+    """Advisory split shift, not a claim of surge or actual ride availability.
+
+    Defaults for 3:30 PM: 12:30–2:45 drive, 2:45–5:30 rest, 5:30 onward return.
+    """
+    if not is_confirmed_michigan_home_game(event):
+        raise ValueError("A confirmed Michigan home football kickoff is required")
+    if stop_buffer_minutes not in (30, 45, 60) or not 1 <= return_after_hours <= 4:
+        raise ValueError("Unsupported game-day planning preferences")
+    kickoff = event["start"]
+    pre_start = kickoff - timedelta(hours=3)
+    pre_end = kickoff - timedelta(minutes=stop_buffer_minutes)
+    return_at = max(kickoff + timedelta(hours=return_after_hours),
+                    local_dt(datetime.combine(kickoff.date(), time(15))))
+    midnight = local_dt(datetime.combine(kickoff.date() + timedelta(days=1), time.min))
+    return_end = midnight  # "onward" stays relevant until the selected day ends.
+    if pre_end <= pre_start:
+        raise ValueError("Pregame window must be positive")
+    def minute(dt):
+        return ((dt.date() - kickoff.date()).days * 1440
+                + dt.hour * 60 + dt.minute)
+    signal = event_impact(event)
+    blocks = [
+        {"time": window(pre_start, pre_end), "app": "Delivery",
+         "title": "Recommended pregame drive",
+         "action": f"Suggested start from {base_camp}: drive roughly three hours before the "
+                   f"{clock(kickoff)} Michigan kickoff. Finish around {clock(pre_end)} "
+                   "and avoid stadium approaches as arrivals peak. "
+                   f"Traffic: {signal['traffic']} "
+                   "Use actual delivery/rideshare offers to decide whether to drive.",
+         "_minute": minute(pre_start), "_end_minute": minute(pre_end)},
+        {"time": window(pre_end, return_at), "app": "Break / Reset",
+         "title": "Head home & recharge",
+         "action": f"Suggested break: return toward {base_camp}, eat or rest, and "
+                   "avoid stadium congestion. Check live conditions before going back out.",
+         "_minute": minute(pre_end), "_end_minute": minute(return_at)},
+    ]
+    if return_at < midnight:
+        blocks.append(
+            {"time": f"{clock(return_at)} onward", "app": "XL / Comfort",
+             "title": "Recommended return shift",
+             "action": f"Consider restarting around {clock(return_at)} for dinner delivery and "
+                       "potential rideshare requests. Monitor game progress, traffic, "
+                       "actual trip offers and legal pickup areas. "
+                       "Continue only while trips remain worthwhile; no surge is guaranteed.",
+             "_minute": minute(return_at), "_end_minute": minute(return_end)})
+    return blocks
+
+
+def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True, include_local=True,
+                      smart_game_day=True, stop_buffer_minutes=45, return_after_hours=2.0):
     """Chronological driving windows, with local traffic context on by default."""
     timeline = []
-    if day_of_week == 3:
+    featured_game = next((event for event in events
+                          if day_of_week in (5, 6) and is_confirmed_michigan_home_game(event)),
+                         None) if smart_game_day else None
+    if featured_game is not None:
+        timeline.extend(game_day_blocks(featured_game, base_camp,
+                                        stop_buffer_minutes=stop_buffer_minutes,
+                                        return_after_hours=return_after_hours))
+    elif day_of_week == 3:
         timeline.extend([
             {"time": "6:00 PM – 8:30 PM", "app": "Delivery",
              "action": "Thursday dinner: consider compact Carpenter / Washtenaw restaurant loops; target $2.50 per mile.",
@@ -616,6 +680,8 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
             })
 
     for event in events:
+        if event is featured_game:
+            continue  # Game already creates a pregame/return plan; don't duplicate its window.
         local = event["tier"] == "NEIGHBORHOOD / SCHOOL"
         if local and not include_local or not local and not include_event_cues:
             continue
@@ -690,9 +756,9 @@ def filter_roadmap(slots, view="All", *, selected_date=None, now=None, remaining
     if view not in ROADMAP_VIEWS:
         raise ValueError("Unknown roadmap filter")
     if view == "Driving":
-        filtered = [slot for slot in slots if slot["app"] in ("Delivery", "XL / Comfort")]
+        filtered = [slot for slot in slots if slot["app"] in ("Delivery", "XL / Comfort", "Break / Reset")]
     elif view == "Traffic & events":
-        filtered = [slot for slot in slots if slot["app"] not in ("Delivery", "XL / Comfort")]
+        filtered = [slot for slot in slots if slot["app"] not in ("Delivery", "XL / Comfort", "Break / Reset")]
     else:
         filtered = list(slots)
     if not remaining:
@@ -718,6 +784,8 @@ def next_planning_window(slots, selected_date, now):
 
 def roadmap_title(slot):
     """Compact headline, leaving full routing guidance in an expander."""
+    if slot.get("title"):
+        return slot["title"]
     if slot["app"] == "Delivery":
         return "Delivery window"
     if slot["app"] == "XL / Comfort":
@@ -729,9 +797,11 @@ MIDNIGHT_CSS = """
 <style>
 :root {color-scheme:dark;}
 html,body,[data-testid="stAppViewContainer"],.stApp {background:#101113 !important;color:#F1F0ED !important;}
-[data-testid="stHeader"] {background:rgba(17,27,42,.94) !important;}
+[data-testid="stHeader"] {background:transparent !important;box-shadow:none !important;}
+/* Keep the sidebar toggle accessible. Only remove the optional top-right toolbar. */
+[data-testid="stToolbar"] {display:none !important;}
 [data-testid="stSidebar"] {background:#17181A !important;}
-.block-container {max-width:960px !important;padding-top:1.25rem !important;padding-bottom:3rem !important;}
+.block-container {max-width:960px !important;padding-top:3.25rem !important;padding-bottom:3rem !important;}
 h1,h2,h3 {color:#FAF9F6 !important;letter-spacing:-.02em;}
 h2 {font-size:1.33rem !important;}
 [data-testid="stCaptionContainer"],small {color:#BCBAB5 !important;}
@@ -778,7 +848,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 }
 .weather-premium strong,.weather-premium small {color:#FFE9B3 !important;}
 @media(max-width:600px){
-  .block-container {padding:.85rem .85rem 2.5rem !important;}
+  .block-container {padding:3.45rem .85rem 2.5rem !important;}
   .pilot-hero {padding:18px 16px;border-radius:16px;}
   .pilot-subtitle {font-size:.8rem;}
   [data-testid="stMetricValue"] {font-size:1.3rem !important;}
@@ -872,14 +942,31 @@ def main():
         st.caption(selected_date.strftime("%A, %B %d, %Y") +
                    " · Chronological windows · Filters are optional")
         render_weather(weather)
-        with st.expander("⚙️ Roadmap filters", expanded=False):
+        home_game = next((ev for ev in events if selected_date.weekday() in (5, 6)
+                          and is_confirmed_michigan_home_game(ev)), None)
+        smart_game_day = home_game is not None
+        stop_buffer = 45
+        return_delay = 2.0
+        with st.expander("⚙️ Roadmap filters & game-day preferences", expanded=False):
             include_events = st.checkbox("Include major-event demand + traffic cues", value=True,
                                          help="Events do not guarantee profitable rides or delivery requests.")
             include_local = st.checkbox("Show school / neighborhood traffic advisories", value=True,
                                         help="Traffic avoidance cues independent of major-event targeting.")
-
-        schedule = generate_schedule(events, base, selected_date.weekday(),
-                                     include_event_cues=include_events, include_local=include_local)
+            if home_game is not None:
+                smart_game_day = st.checkbox("Recommend drive → rest → return for Michigan game", value=True,
+                                             help="Split shifts are recommendations based on the confirmed kickoff, not predictions of surge.")
+                if smart_game_day:
+                    stop_buffer = st.slider("Stop before kickoff (minutes)", 30, 60, 45, 15)
+                    return_delay = st.slider("Return after kickoff (hours)", 1.0, 4.0, 2.0, 0.5)
+        if home_game is not None and smart_game_day:
+            st.caption(f"🏈 Confirmed {clock(home_game['start'])} kickoff · "
+                       "Suggested split shift below. Adjust its timing in Roadmap filters. "
+                       "Always verify live offers and traffic.")
+        schedule = generate_schedule(
+            events, base, selected_date.weekday(),
+            include_event_cues=include_events, include_local=include_local,
+            smart_game_day=smart_game_day, stop_buffer_minutes=stop_buffer,
+            return_after_hours=return_delay)
         upcoming = next_planning_window(schedule, selected_date, now)
         with st.container(border=True):
             st.caption("CURRENT / NEXT LISTED WINDOW" if selected_date == now.date()

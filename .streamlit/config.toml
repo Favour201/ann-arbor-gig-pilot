@@ -5,3 +5,7 @@ backgroundColor = "#101113"
 secondaryBackgroundColor = "#202124"
 textColor = "#F1F0ED"
 font = "sans serif"
+
+[client]
+# Keep built-in Streamlit menu unobtrusive without removing the sidebar toggle.
+toolbarMode = "minimal"

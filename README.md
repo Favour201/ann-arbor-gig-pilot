@@ -11,6 +11,16 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Smart Michigan game-day split shifts
+
+For a **confirmed Michigan Stadium football kickoff on Saturday or Sunday**, the roadmap automatically recommends a practical **pregame drive → home rest → return** pattern instead of showing only one broad pregame crowd window. By default, a **3:30 PM** kickoff suggests driving **12:30–2:45 PM**, taking a break **2:45–5:30 PM**, and returning **5:30 PM onward** (subject to real demand, traffic, road closures and personal preference). Use the existing *Roadmap filters & game-day preferences* expander to change the stop buffer to **30 / 45 / 60 minutes**, or the return delay to **1–4 hours after kickoff**. For noon kickoffs, the return block will not begin before 3 PM.
+
+The three recommendations are clearly identified as optional and are chronological. They replace the generic Saturday/Sunday baseline to avoid contradictory overlap, but other independent local event alerts remain visible. The game stays **Kickoff TBD** until its official athletics schedule publishes a usable clock time; we do not fabricate split-shift timings for unknown or away games. The plan does not predict surge or override unsafe weather/road conditions.
+
+### Less intrusive Streamlit chrome
+
+In `.streamlit/config.toml`, `[client] toolbarMode = "minimal"` reduces optional top-right controls. Narrow CSS hides only Streamlit's optional toolbar and gives the custom graphite hero extra top clearance while **preserving the collapsed-sidebar button** and debugging/management access through Streamlit Community Cloud's workspace. This intentionally avoids hiding the entire Streamlit header or relying on fragile full-page embedding tricks. Streamlit Cloud can still show platform-managed UI outside the app's control.
+
 ## Graphite Pilot design
 
 - **Theme:** premium monochrome graphite/near-black native Streamlit theme in `.streamlit/config.toml`, charcoal cards, warm-silver accents, clear keyboard-focus indicators and reduced-motion support. Amber remains exclusively for weather caution. CSS stays in `app.py` and requires no new dependency.
@@ -58,4 +68,4 @@ pip install pytest
 python -m pytest -q
 ```
 
-Tests cover time-aware Ogbuefi greetings, graphite style markers, three roadmap views, remaining-window and up-next boundaries (including active and TBD events), compact timeline headings, gas-price and profit math, NWS and events, officially confirmed kickoff updates, chronological roadmaps and offline Streamlit rendering.
+Tests cover time-aware Ogbuefi greetings, graphite style markers, three roadmap views, remaining-window and up-next boundaries (including active and TBD events), compact timeline headings, gas-price and profit math, NWS and events, officially confirmed kickoff updates, chronological roadmaps and offline Streamlit rendering. Smart-game Saturday 3:30 PM split shifts, preference overrides, TBD/away fallback, early-kickoff behavior and toolbar config are regression-tested.
