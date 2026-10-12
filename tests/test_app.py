@@ -202,7 +202,7 @@ def test_michigan_kickoff_tbd_then_official_time_updates():
     assert not announced[0]["all_day"]
     assert (announced[0]["start"].hour, announced[0]["start"].minute) == (15, 30)
     assert app.event_time_label(announced[0]) == "3:30 PM"
-    assert any(slot["time"] == "12:30 PM – 3:30 PM"
+    assert any(slot["time"] == "12:30 PM – 2:30 PM" and slot["app"] == "Pregame drive"
                for slot in app.generate_schedule(announced, app.BASE, 5))
 
 
@@ -296,3 +296,64 @@ def test_graphite_native_theme_avoids_blue():
     assert '#CFCAC1' in config
     assert '#84C0FF' not in config
     assert "ROADMAP_VIEWS" not in config
+
+
+
+def test_saturday_game_recommends_split_shift_and_rest():
+    event = app.event_record("Michigan Football vs Penn State", "Michigan Stadium",
+                             "2026-10-17T15:30:00-04:00", None, "Official")
+    slots = app.generate_schedule([event], app.BASE, 5)
+    assert [s["time"] for s in slots[:3]] == [
+        "12:30 PM – 2:30 PM", "2:30 PM – 5:30 PM", "5:30 PM – 8:30 PM"]
+    assert [s["app"] for s in slots[:3]] == [
+        "Pregame drive", "Rest / reset", "Evening return"]
+    assert not any(s["time"] == "5:00 PM – 8:00 PM" for s in slots)
+    assert all("guarantee" not in s["action"].lower() for s in slots)
+    assert "stadium" in slots[0]["action"].lower()
+    assert "NOT assumed" in slots[2]["action"]
+    assert app.next_planning_window(slots, date(2026, 10, 17),
+           datetime(2026, 10, 17, 12, 0, tzinfo=app.TZ))["app"] == "Pregame drive"
+    assert len(app.filter_roadmap(slots, "Driving")) == 3
+
+
+def test_saturday_driver_can_extend_pregame_to_three_pm():
+    event = app.event_record("Michigan Football", "Michigan Stadium",
+                             "2026-10-17T15:30:00-04:00", None, "Official")
+    slots = app.generate_schedule([event], app.BASE, 5, pregame_buffer_minutes=30)
+    assert [s["time"] for s in slots] == [
+        "12:30 PM – 3:00 PM", "3:00 PM – 5:30 PM", "5:30 PM – 8:30 PM"]
+    import pytest
+    with pytest.raises(ValueError):
+        app.saturday_game_driving_plan(event, app.BASE, 15)
+
+
+def test_tbd_and_no_game_keep_standard_saturday_plan():
+    tbd = app.event_record("Michigan Football vs Opponent", "Michigan Stadium",
+                           "2026-10-17", None, "Official", all_day=True)
+    base = app.generate_schedule([tbd], app.BASE, 5)
+    assert base[0]["time"] == "5:00 PM – 8:00 PM"
+    assert base[-1]["time"] == "Kickoff TBD • timing unconfirmed"
+    assert not any(s["app"] == "Pregame drive" for s in base)
+    game = app.event_record("Michigan Football vs Opponent", "Michigan Stadium",
+                            "2026-10-17T15:30:00-04:00", None, "Official")
+    manual_opt_out = app.generate_schedule([game], app.BASE, 5, include_event_cues=False)
+    assert not any(s["app"] == "Pregame drive" for s in manual_opt_out)
+    assert any(s["time"] == "5:00 PM – 8:00 PM" for s in manual_opt_out)
+
+
+def test_saturday_interactions_keep_school_advisories_and_time_order():
+    game = app.event_record("Michigan Football", "Michigan Stadium",
+                             "2026-10-17T15:30:00-04:00", None, "Official")
+    concert = app.event_record("Pioneer Theater Musical", "Pioneer High School",
+                                "2026-10-17T19:00:00-04:00", None, "School")
+    slots = app.generate_schedule([concert, game], app.BASE, 5)
+    assert any(s["app"].startswith("NEIGHBORHOOD") for s in slots)
+    start_minutes = [s["start_minute"] for s in slots if s["start_minute"] is not None]
+    assert start_minutes == sorted(start_minutes)
+
+
+def test_supported_minimal_toolbar_and_accessible_in_page_controls():
+    from pathlib import Path
+    config = Path(".streamlit/config.toml").read_text()
+    assert 'toolbarMode = "minimal"' in config
+    assert '[data-testid="stHeader"], [data-testid="stToolbar"]' in app.MIDNIGHT_CSS
