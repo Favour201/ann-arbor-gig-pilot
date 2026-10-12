@@ -216,6 +216,31 @@ def daily_history_brief(rows, selected_date, min_sample=3):
                         "Historical observation, not a prediction.")}
 
 
+def daily_decision_brief(day, events_data, weather, history_rows=None):
+    """Cautious daily overview based on *available* published evidence."""
+    events = events_data.get("events", [])
+    major = sum(1 for event in events if event.get("tier") != "NEIGHBORHOOD / SCHOOL")
+    local = len(events) - major
+    coverage = events_data.get("coverage", [])
+    unverified = any(not str(row.get("Status", "")).startswith("Checked")
+                     for row in coverage)
+    if major or local:
+        event_line = f"{major} major and {local} local reported event(s): assess congestion before positioning."
+    else:
+        event_line = "No events returned by available feeds; that does not prove roads are clear."
+    if unverified:
+        event_line += " Some event sources are unverified."
+    hazards = weather.get("hazards", [])
+    if hazards:
+        weather_line = "Forecast trigger(s): " + ", ".join(hazards) + ". Put road safety first; no surge is confirmed."
+    elif any(p.get("status") != "Available" for p in weather.get("places", [])):
+        weather_line = "Some forecast coverage is unavailable; check conditions before driving."
+    else:
+        weather_line = "No planning weather trigger returned by available forecasts; check live road conditions."
+    history = daily_history_brief(history_rows or [], day)
+    return {"events": event_line, "weather": weather_line, "history": history}
+
+
 def open_sheet(credentials, sheet_id):
     """Caller must authenticate the user before opening this private sheet."""
     import gspread
