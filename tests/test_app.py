@@ -85,6 +85,11 @@ def test_offline_ui_and_grader():
         next(b for b in at.button if b.label == "Grade my week").click().run()
         assert not at.exception
         assert any("After-fuel earnings" in x.value for x in at.success)
+        at.segmented_control[0].set_value("Drive").run()
+        at.segmented_control[0].set_value("Earnings & Fuel").run()
+        assert not at.exception
+        gas = next(n for n in at.number_input if n.label == "Gas price you checked ($/gal)")
+        assert gas.value == 3.79  # Price remains after widget's workspace disappears.
 
 
 def test_workspace_navigation_hides_unneeded_content_and_preserves_date():
@@ -103,6 +108,9 @@ def test_workspace_navigation_hides_unneeded_content_and_preserves_date():
         assert not at.dataframe
         assert not at.number_input
         assert event_fetch.call_count == 1
+        chosen = date(2026, 10, 17)
+        at.date_input[0].set_value(chosen).run()
+        assert at.session_state["planned_date"] == chosen
         at.segmented_control[0].set_value("Events & Traffic").run()
         assert not at.exception
         assert len(at.dataframe) == 1  # Present only in deliberate Advanced diagnostics.
@@ -116,6 +124,7 @@ def test_workspace_navigation_hides_unneeded_content_and_preserves_date():
         at.segmented_control[0].set_value("Drive").run()
         assert not at.exception
         assert len(at.date_input) == 1
+        assert at.date_input[0].value == chosen  # Date persists across hidden widget.
 
 
 def test_separate_workspace_pure_helpers_keep_event_classification():
