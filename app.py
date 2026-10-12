@@ -115,6 +115,73 @@ def on_day(event, day):
     return overlaps(event["start"], end, day)
 
 
+KICKOFF_CLOCK = re.compile(
+    r"(?<!\d)(?P<hour>1[0-2]|0?[1-9])(?:[:.](?P<minute>[0-5]\d))?\s*"
+    r"(?P<meridiem>a\.?m\.?|p\.?m\.?)(?!\w)", re.I)
+
+
+def resolve_published_start(date_value, published_time, tbd=False):
+    """Only set a clock time if explicitly published; automatically accept later updates.
+
+    Date-only or TBA schedule entries stay untimed, never silently become midnight
+    kickoffs. A dated datetime with nonmidnight time is the secondary official source.
+    """
+    published = local_dt(date_value)
+    text = str(published_time or "").strip()
+    flag = tbd is True or str(tbd).strip().lower() in ("true", "yes", "1", "tbd", "tba")
+    if flag or re.search(r"\b(?:TBD|TBA|TBC|To Be Announced)\b", text, re.I):
+        return local_dt(published.date()), True
+    match = KICKOFF_CLOCK.search(text)
+    if match:
+        hour = int(match.group("hour")) % 12
+        if match.group("meridiem")[0].lower() == "p":
+            hour += 12
+        minute = int(match.group("minute") or 0)
+        return local_dt(datetime.combine(published.date(), time(hour, minute))), False
+    if text.lower() in ("noon", "12 noon"):
+        return local_dt(datetime.combine(published.date(), time(12))), False
+    if published.time() != time.min:
+        return published, False
+    return local_dt(published.date()), True
+
+
+def event_impact(event):
+    """Driver-planning advisory, not a forecast of surge or paid trips."""
+    tier = event["tier"]
+    venue = event["venue"].lower()
+    name = event["name"].lower()
+    if tier == "CRITICAL IMPACT":
+        return {
+            "demand": "Potential rideshare and delivery activity around arrivals, breaks and departures; verify in apps.",
+            "traffic": "Major stadium approaches and nearby delivery routes may slow significantly.",
+            "action": "Check live closures and trip economics before entering Michigan Stadium approaches.",
+        }
+    if tier in ("YPSI GAME DAY", "INDOOR ARENA"):
+        return {
+            "demand": "Possible rideshare and delivery activity; crowd size and timing matter.",
+            "traffic": "Venue arrivals and exits may slow nearby streets.",
+            "action": "Use confirmed pickup zones and check road conditions before repositioning.",
+        }
+    if tier == "PERFORMING ARTS":
+        return {
+            "demand": "Possible ride requests near showtime and after performances; food-delivery effects uncertain.",
+            "traffic": "Short arrival and dismissal congestion is possible.",
+            "action": "Check downtown traffic and legal pickups before moving toward the venue.",
+        }
+    school_performance = any(x in name for x in
+        ("theater", "theatre", "musical", "play", "concert", "choir", "orchestra", "band", "performance", "dance"))
+    area = ("Pioneer campus and nearby school entrances" if "pioneer" in venue
+            else "Huron campus and nearby school entrances" if "huron" in venue
+            else "Skyline campus and nearby school entrances" if "skyline" in venue
+            else "the event venue and its immediate approaches")
+    return {
+        "demand": "Small or uncertain direct rideshare and delivery effect; not a standalone earning signal.",
+        "traffic": ("Performance arrival/departure congestion may affect " if school_performance
+                    else "Localized event traffic may affect ") + area + ".",
+        "action": "Consider routing around " + area + " during arrivals and departures; confirm live traffic.",
+    }
+
+
 def parse_sidearm(html, day, school, sport, source):
     """Parse the public SSR Nuxt schedule table; no private API dependency."""
     node = BeautifulSoup(html, "html.parser").select_one("#__NUXT_DATA__")
@@ -134,7 +201,7 @@ def parse_sidearm(html, day, school, sport, source):
                 continue  # Away and Detroit neutral-site games do not create local stadium crowds.
             if any(x in str(row.get("game_state_display", "")).lower() for x in ("cancel", "postpon")):
                 continue
-            start = local_dt(row["date"])
+            start, tbd = resolve_published_start(row["date"], row.get("time"), row.get("tbd"))
             if start.date() != day:
                 continue
             opponent = deref(row["opponent"].get("title")) or "Opponent TBD"
@@ -145,7 +212,6 @@ def parse_sidearm(html, day, school, sport, source):
                               ("EMU", "football"): "Rynearson Stadium"}
             venue = venue or default_venues.get((school, sport), row["location"])
             title = f"{school} {sport.replace('-', ' ').title()} vs. {opponent}"
-            tbd = bool(row.get("tbd")) or not row.get("time") or bool(re.search(r"TBA|TBD", row["time"], re.I))
             events.append(event_record(title, venue, start, None, school + " Athletics", source, tbd,
                                        "YPSI GAME DAY" if school == "EMU" else None))
         except (ValueError, KeyError, TypeError, AttributeError):
