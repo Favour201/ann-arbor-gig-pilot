@@ -720,7 +720,7 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
             for item in timeline]
 
 
-def render_weather(weather):
+def render_weather(weather, *, details=True):
     if weather["hazards"]:
         st.markdown('<div class="weather-premium" role="status"><strong>⚠ Weather Premium Surge Warning</strong><br>'
                     + escape(" • ".join(weather["hazards"]))
@@ -728,16 +728,15 @@ def render_weather(weather):
     for place in weather["places"]:
         if place["status"] != "Available":
             st.caption(f"{place['place']}: {place['status']}. This does not indicate clear weather.")
-    with st.expander("Weather forecast details"):
-        st.caption(f"Checked {weather['checked'].strftime('%b %d, %I:%M %p %Z')} • Cold threshold: {COLD_F}°F")
-        for place in weather["places"]:
-            st.write(place["place"])
-            for period in place["periods"]:
-                st.write(f"{period.get('name', '')}: {period.get('temperature', '—')}°{period.get('temperatureUnit', '')} · {period.get('shortForecast', '')}")
-            if place["url"]:
-                st.link_button("NWS source", place["url"])
-
-
+    if details:
+        with st.expander("Weather forecast details"):
+            st.caption(f"Checked {weather['checked'].strftime('%b %d, %I:%M %p %Z')} • Cold threshold: {COLD_F}°F")
+            for place in weather["places"]:
+                st.write(place["place"])
+                for period in place["periods"]:
+                    st.write(f"{period.get('name', '')}: {period.get('temperature', '—')}°{period.get('temperatureUnit', '')} · {period.get('shortForecast', '')}")
+                if place["url"]:
+                    st.link_button("NWS source", place["url"])
 
 
 def greeting_for_hour(hour):
@@ -841,6 +840,13 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 .pilot-kicker {color:#D5D0C6;font-size:.75rem;font-weight:770;letter-spacing:.1em;text-transform:uppercase;}
 .pilot-timeline-time {color:#E1DCD1;font-size:.93rem;font-weight:750;}
 .pilot-next {border-left:3px solid #B7B1A6;padding-left:10px;}
+.pilot-mini-note {color:#C3C1BC;font-size:.83rem;line-height:1.45;margin:.25rem 0 .9rem;}
+.pilot-section-head {color:#D9D5CF;font-size:.73rem;font-weight:750;letter-spacing:.11em;text-transform:uppercase;margin:.65rem 0;}
+[data-testid="stSegmentedControl"] {margin-bottom: .65rem;}
+/* Use native Streamlit focus/keyboard semantics; style the selected page clearly. */
+[data-testid="stSegmentedControl"] button[aria-pressed="true"] {
+  background:#484744 !important;color:#FFFDF7 !important;
+}
 .weather-premium {
   background:#4A3718 !important;color:#FFECC2 !important;
   border:1px solid #C99B3D !important;border-radius:12px;
