@@ -82,3 +82,91 @@ def test_gasbuddy_links_and_explicit_manual_price():
     assert "gasbuddy.com/home?search=Ypsilanti" in app.GASBUDDY_YPSILANTI_URL
     assert app.calculate_metrics(100, 4, 160, 3.79)["fuel_cost"] == 37.9
     assert app.calculate_metrics(100, 4, 160, None) is None
+
+
+def test_marquee_official_card_and_selected_date():
+    html = """<main><article><h3>Kenny Wayne Shepherd</h3>
+    <div>Wednesday, October 14th, 2026 at 8:00 PM | Main Auditorium</div></article>
+    <article><h3>Future Artist</h3><p>Wednesday, November 11, 2026 at 7:00 PM</p></article></main>"""
+    found = app.parse_marquee_events(html, date(2026, 10, 14), "https://marquee-arts.org/live-events/")
+    assert len(found) == 1
+    assert found[0]["name"] == "Kenny Wayne Shepherd"
+    assert found[0]["tier"] == "PERFORMING ARTS"
+    assert (found[0]["start"].hour, found[0]["start"].minute) == (20, 0)
+    # A yearless event must not be assigned to whichever year the driver selects.
+    unknown_year = "<article><h3>Future show</h3><p>Saturday, February 6 at 8:00 PM</p></article>"
+    assert app.parse_marquee_events(unknown_year, date(2026, 2, 6), "https://marquee-arts.org/live-events/") == []
+
+
+def test_eventlink_local_only_and_no_invented_tbd_start():
+    html = """<h1>EVENTS</h1>
+    <h4>Football (Boys V)</h4>
+    <div>Ann Arbor Huron High School (H)</div><div>Fri, Oct. 16 2026 7:00 PM EDT</div>
+    <div>Pioneer High School</div>
+    <h4>Soccer (Boys V)</h4><div>Dexter High School (A)</div>
+    <div>Fri, Oct. 16 2026 7:00 PM EDT</div><div>Dexter High School</div>
+    <h4>Field Hockey (Girls V)</h4><div>Regional (H)</div>
+    <div>Fri, Oct. 16 2026 TBD</div><div>Pioneer High School</div>"""
+    found = app.parse_eventlink_events(html, date(2026, 10, 16), "Pioneer", "https://pioneerathletics.net/Events")
+    assert len(found) == 2
+    assert any(e["all_day"] for e in found)
+    assert any(e["start"].hour == 19 for e in found)
+    assert all("Dexter High School" not in e["venue"] for e in found)
+
+
+def test_school_calendar_uses_only_visible_month_and_timed_events():
+    html = """<h2>October 2026</h2><h3>Friday, October 16</h3>
+    <div>Pioneer Events Fall Choir Concert</div><div>7:30 PM - 9:00 PM</div>
+    <div>Pioneer High School, Ann Arbor</div>
+    <h3>Saturday, October 17</h3><div>School is closed</div><div>All Day</div>"""
+    found = app.parse_school_calendar(html, date(2026, 10, 16), "Pioneer", "https://pioneer.a2schools.org/calendar")
+    assert len(found) == 1
+    assert found[0]["start"].hour == 19 and found[0]["start"].minute == 30
+    assert found[0]["tier"] == "NEIGHBORHOOD / SCHOOL"
+    import pytest
+    with pytest.raises(ValueError, match="month not visible"):
+        app.parse_school_calendar(html, date(2026, 11, 16), "Pioneer", "")
+
+
+def test_theater_bad_markup_reported_as_unknown():
+    import pytest
+    with pytest.raises(ValueError):
+        app.parse_marquee_events("<html><h1>Blocked</h1></html>", date(2026, 10, 14), "")
+    with pytest.raises(ValueError):
+        app.parse_eventlink_events("<p>unavailable</p>", date(2026, 10, 14), "Pioneer", "")
+
+
+def test_roadmap_chronology_early_events_before_evening_shift():
+    stadium = app.event_record("Michigan Football", "Michigan Stadium",
+                               "2026-10-15T15:30:00-04:00", None, "Fixture")
+    theater = app.event_record("Show", "Michigan Theater",
+                               "2026-10-15T20:00:00-04:00", None, "Fixture")
+    slots = app.generate_schedule([theater, stadium], app.BASE, 3)
+    assert slots[0]["time"] == "12:30 PM – 3:30 PM"
+    assert slots[1]["time"] == "6:00 PM – 8:30 PM"
+    assert slots[2]["time"] == "7:00 PM – 8:00 PM"
+    assert slots[3]["time"] == "8:30 PM onward"
+
+
+def test_school_cues_opt_in_and_not_mandatory():
+    school = app.event_record("Homecoming Game", "Pioneer High School",
+                              "2026-10-15T19:00:00-04:00", None, "School")
+    stadium = app.event_record("Michigan Football", "Michigan Stadium",
+                               "2026-10-15T15:30:00-04:00", None, "U-M")
+    default = app.generate_schedule([school, stadium], app.BASE, 3)
+    assert not any(slot["app"].startswith("NEIGHBORHOOD") for slot in default)
+    assert any(slot["app"].startswith("CRITICAL") for slot in default)
+    opted = app.generate_schedule([school, stadium], app.BASE, 3, include_local=True)
+    assert any(slot["app"].startswith("NEIGHBORHOOD") for slot in opted)
+    pure = app.generate_schedule([school, stadium], app.BASE, 3, include_event_cues=False)
+    assert all(slot["app"] in ("Delivery", "XL / Comfort") for slot in pure)
+
+
+def test_unknown_kickoff_timing_is_separate_and_last():
+    mystery = app.event_record("Unconfirmed kickoff", "Michigan Stadium",
+                               "2026-10-15", None, "Fixture", all_day=True)
+    slots = app.generate_schedule([mystery], app.BASE, 3)
+    assert slots[-1]["time"] == "Time unconfirmed (optional context)"
+    assert "optional" in slots[-1]["app"]
+    assert slots[0]["time"] == "6:00 PM – 8:30 PM"
+

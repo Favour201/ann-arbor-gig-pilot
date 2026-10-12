@@ -87,7 +87,7 @@ def overlaps(start, end, day):
 def classify(venue, name=""):
     venue = venue.lower()
     if "michigan stadium" in venue:
-        return "CRITICAL IMPACT" if "football" in name.lower() else "INDOOR ARENA" if "arena" in venue else "NEIGHBORHOOD / SCHOOL"
+        return "CRITICAL IMPACT" if any(k in name.lower() for k in ("football", "kickoff")) else "NEIGHBORHOOD / SCHOOL"
     if any(x in venue for x in ("rynearson", "george gervin", "convocation", "bowen", "eastern michigan")):
         return "YPSI GAME DAY"
     if any(x in venue for x in ("crisler", "yost")):
@@ -238,6 +238,155 @@ def parse_extra(text, fmt, day, name, source):
     return events
 
 
+
+MONTH_NAME = r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+DATE_WORD = re.compile(rf"\b(?P<month>{MONTH_NAME})\s+(?P<day>\d{{1,2}})(?:st|nd|rd|th)?(?:,\s*(?P<year>20\d{{2}}))?\s+(?:at|from)\s+(?P<hour>\d{{1,2}})(?::(?P<minute>\d{{2}}))?\s*(?P<meridiem>AM|PM)\b", re.I)
+MONTH_SHORT = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+SCHOOL_DATE = re.compile(rf"^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s*(?P<month>{MONTH_NAME})\s+(?P<day>\d{{1,2}})$", re.I)
+SCHOOL_TIME = re.compile(r"\b(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<meridiem>AM|PM)\s*-\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b", re.I)
+EVENTLINK_DATE = re.compile(rf"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\s+(?P<month>{MONTH_SHORT})\.?\s+(?P<day>\d{{1,2}})\s+(?P<year>20\d{{2}})\s+(?:(?P<hour>\d{{1,2}}):(?P<minute>\d{{2}})\s*(?P<meridiem>AM|PM)|TBD)\b", re.I)
+SCHOOL_IMPACT_WORDS = ("football", "basketball", "volleyball", "soccer", "concert", "dance", "theatre", "theater", "homecoming", "graduation", "orchestra", "choir", "band", "gymnastics", "hockey", "field hockey", "water polo", "wrestling", "play", "musical", "swimming", "track", "sports", "ceremony", "festival", "competition")
+
+
+def date_from_match(match, chosen_day, month_format):
+    """Parse published local clock time without inventing a year for a different selected date."""
+    values = match.groupdict()
+    year = int(values.get("year") or chosen_day.year)
+    month = datetime.strptime(values["month"].title(), month_format).month
+    hour = int(values["hour"]) % 12 + (12 if values["meridiem"].upper() == "PM" else 0)
+    minute = int(values.get("minute") or 0)
+    return local_dt(datetime(year, month, int(values["day"]), hour, minute))
+
+
+def parse_marquee_events(html, day, source):
+    """Best-effort official theater's published, dated live-event cards; no made-up times."""
+    soup = BeautifulSoup(html, "html.parser")
+    events, recognized = [], 0
+    for head in soup.select("h2, h3, h4"):
+        name = head.get_text(" ", strip=True)
+        if not 3 <= len(name) <= 160 or name.lower() in (
+                "live events", "artistic excellence", "penny stamps speaker series",
+                "michigan theater", "state theatre", "find us"):
+            continue
+        context = ""
+        for parent in (head.parent, head.parent.parent if head.parent else None,
+                       head.parent.parent.parent if head.parent and head.parent.parent else None):
+            if parent is None:
+                continue
+            candidate = parent.get_text(" ", strip=True)
+            if len(name) < len(candidate) < 1300 and DATE_WORD.search(candidate):
+                context = candidate
+                break
+        if not context:
+            continue
+        match = DATE_WORD.search(context)
+        if not match:
+            continue
+        recognized += 1
+        if not match.group("year"):
+            continue  # Date-only future listings are ambiguous: never assume the selected year.
+        if re.search(r"\b(cancelled|canceled|postponed)\b", context, re.I):
+            continue
+        try:
+            start = date_from_match(match, day, "%B")
+            if start.date() != day:
+                continue
+            href = head.find("a", href=True) or (head.parent.find("a", href=True) if head.parent else None)
+            url = href.get("href", "") if href else source
+            if url.startswith("/"):
+                url = "https://marquee-arts.org" + url
+            events.append(event_record(name, "Michigan Theater, Ann Arbor", start, None, "Marquee Arts", url))
+        except (ValueError, OverflowError):
+            continue
+    if not recognized:
+        raise ValueError("No recognizable dated theater cards")
+    return events
+
+
+def parse_eventlink_events(html, day, school, source):
+    """Read public athletic listing rows; never treat away games outside the corridor as local."""
+    soup = BeautifulSoup(html, "html.parser")
+    if "EVENTS" not in soup.get_text(" ", strip=True).upper():
+        raise ValueError("Athletics listing markup unavailable")
+    events, recognized = [], 0
+    # Visible listing text is often more stable across Eventlink website themes than CSS classes.
+    lines = [v.strip() for v in soup.stripped_strings if v.strip()]
+    for i, line in enumerate(lines):
+        match = EVENTLINK_DATE.search(line)
+        if not match:
+            continue
+        recognized += 1
+        opponent = lines[i - 1] if i > 0 else ""
+        venue = lines[i + 1] if i + 1 < len(lines) else ""
+        sport = "School athletics"
+        for previous in reversed(lines[max(0, i - 9):i]):
+            if re.search(r"\b(Football|Soccer|Basketball|Volleyball|Hockey|Field Hockey|Water Polo|Wrestling|Lacrosse|Swimming|Gymnastics|Track|Softball|Baseball|Tennis)\b", previous, re.I):
+                sport = previous[:75]
+                break
+        if not in_corridor(venue) or re.search(r"\b(cancelled|canceled|postponed)\b", opponent, re.I):
+            continue
+        try:
+            tbd = not match.group("hour")
+            if tbd:
+                start = local_dt(date(int(match.group("year")), datetime.strptime(match.group("month").title(), "%b").month, int(match.group("day"))))
+            else:
+                start = date_from_match(match, day, "%b")
+            if start.date() != day:
+                continue
+            events.append(event_record(f"{school} • {sport} • {opponent}", venue,
+                                       start, None, school + " Athletics", source, all_day=tbd))
+        except ValueError:
+            continue
+    if not recognized:
+        raise ValueError("No recognizable athletics dates")
+    return events
+
+
+def parse_school_calendar(html, day, school, source):
+    """Read the school's rendered calendar, but only the month explicitly visible on the page."""
+    soup = BeautifulSoup(html, "html.parser")
+    lines = [v.strip() for v in soup.stripped_strings if v.strip()]
+    calendar_month = day.strftime("%B %Y")
+    if not any(line == calendar_month for line in lines):
+        raise ValueError("Selected month not visible in school calendar")
+    current_day, events = None, []
+    school_venue = f"{school} High School, Ann Arbor"
+    recognized = False
+    for i, line in enumerate(lines):
+        match = SCHOOL_DATE.fullmatch(line)
+        if match:
+            try:
+                current_day = date(day.year, datetime.strptime(match.group("month").title(), "%B").month, int(match.group("day")))
+                recognized = True
+            except ValueError:
+                current_day = None
+            continue
+        if current_day != day or not any(x in line.lower() for x in SCHOOL_IMPACT_WORDS):
+            continue
+        # The school calendar sometimes lists the source category separately from its event title.
+        if line.lower().strip() in ("huron athletics", "pioneer events", "skyline public calendar"):
+            continue
+        title = line
+        nearby = lines[i + 1:i + 6]
+        time_match = next((SCHOOL_TIME.search(v) for v in nearby if SCHOOL_TIME.search(v)), None)
+        if not time_match:
+            continue  # No usable event time; do not fabricate one.
+        venue = next((v for v in nearby if in_corridor(v)), "")
+        if " @ " in title and not venue:
+            continue  # Away game with no confirmed local venue.
+        if not venue:
+            venue = school_venue
+        try:
+            hour = int(time_match.group("hour")) % 12 + (12 if time_match.group("meridiem").upper() == "PM" else 0)
+            start = local_dt(datetime.combine(day, time(hour, int(time_match.group("minute") or 0))))
+            events.append(event_record(f"{school}: {title}", venue, start, None, school + " Calendar", source))
+        except ValueError:
+            continue
+    if not recognized:
+        raise ValueError("School calendar dates not readable")
+    return events
+
+
 @st.cache_data(ttl=1800, max_entries=32, show_spinner=False)
 def fetch_live_events(day, extra_json="[]"):
     jobs = [("U-M campus / Hill Auditorium", "umich", "https://events.umich.edu/", None)]
@@ -247,6 +396,13 @@ def fetch_live_events(day, extra_json="[]"):
     ]:
         for sport in sports:
             jobs.append((school + " " + sport, "sidearm", f"https://{host}/sports/{sport}/schedule", (school, sport)))
+    jobs.extend([
+        ("Michigan Theater (Marquee Arts)", "marquee", "https://marquee-arts.org/live-events/", None),
+        ("Pioneer Athletics", "eventlink", "https://pioneerathletics.net/Events", "Pioneer"),
+        ("Pioneer School Calendar", "school-calendar", "https://pioneer.a2schools.org/calendar", "Pioneer"),
+        ("Huron School Calendar", "school-calendar", "https://huron.a2schools.org/hurondistrict-calendar", "Huron"),
+        ("Skyline School Calendar", "school-calendar", "https://skyline.a2schools.org/calendar", "Skyline"),
+    ])
     notes = []
     try:
         extra = json.loads(extra_json)
@@ -258,8 +414,6 @@ def fetch_live_events(day, extra_json="[]"):
             jobs.append((feed["name"], feed["format"], feed["url"], None))
     except (ValueError, TypeError):
         notes.append("Additional calendar settings are invalid.")
-    if len(jobs) == 13:
-        notes.append("Michigan Theater and neighborhood/high-school feeds are not connected. Add their JSON or iCalendar feeds in EVENT_FEEDS_JSON.")
 
     def run(job):
         name, fmt, url, detail = job
@@ -268,11 +422,17 @@ def fetch_live_events(day, extra_json="[]"):
                 events = fetch_umich(day)
             elif fmt == "sidearm":
                 events = parse_sidearm(get(url).text, day, *detail, url)
+            elif fmt == "marquee":
+                events = parse_marquee_events(get(url).text, day, url)
+            elif fmt == "eventlink":
+                events = parse_eventlink_events(get(url, params={"from": day.isoformat(), "to": day.isoformat()}).text, day, detail, url)
+            elif fmt == "school-calendar":
+                events = parse_school_calendar(get(url).text, day, detail, url)
             else:
                 events = parse_extra(get(url).text, fmt, day, name, url)
             return events, {"Source": name, "Status": f"Checked • {len(events)} matches", "URL": url}
         except (requests.RequestException, ValueError, TypeError, KeyError, AttributeError, IndexError):
-            return [], {"Source": name, "Status": "Unavailable / format changed", "URL": url}
+            return [], {"Source": name, "Status": "Not verified (blocked / date not visible / format changed)", "URL": url}
     events, coverage = [], []
     with ThreadPoolExecutor(max_workers=6) as pool:
         for found, status in pool.map(run, jobs):
@@ -352,38 +512,68 @@ def window(start, end):
     return f"{clock(start)} – {clock(end)}{suffix}"
 
 
-def generate_schedule(events, base_camp, day_of_week):
+def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True, include_local=False):
+    """Chronological advisory roadmap. Unknown-time events sort last, never as midnight."""
     timeline = []
     if day_of_week == 3:
-        timeline.extend([{"time": "6:00 PM – 8:30 PM", "app": "Delivery", "action": "Thursday dinner: consider compact Carpenter / Washtenaw restaurant loops; target $2.50 per mile."},
-                         {"time": "8:30 PM onward", "app": "XL / Comfort", "action": "Check actual app demand around South U / Packard before repositioning."}])
+        timeline.extend([
+            {"time": "6:00 PM – 8:30 PM", "app": "Delivery",
+             "action": "Thursday dinner: consider compact Carpenter / Washtenaw restaurant loops; target $2.50 per mile.",
+             "_minute": 18 * 60},
+            {"time": "8:30 PM onward", "app": "XL / Comfort",
+             "action": "Check actual app demand around South U / Packard before repositioning.",
+             "_minute": 20 * 60 + 30},
+        ])
     else:
-        timeline.append({"time": "4:30 PM – 9:30 PM" if day_of_week == 6 else "5:00 PM – 8:00 PM", "app": "Delivery",
-                         "action": f"Start from {base_camp}. Favor short Carpenter / Washtenaw loops and account for unpaid return miles."})
+        is_sunday = day_of_week == 6
+        timeline.append({
+            "time": "4:30 PM – 9:30 PM" if is_sunday else "5:00 PM – 8:00 PM",
+            "app": "Delivery",
+            "action": f"Start from {base_camp}. Favor short Carpenter / Washtenaw loops and account for unpaid return miles.",
+            "_minute": 16 * 60 + 30 if is_sunday else 17 * 60,
+        })
         if day_of_week in (4, 5):
-            timeline.append({"time": "8:00 PM onward", "app": "XL / Comfort", "action": "Check downtown demand and legal pickup locations before moving; premiums are not guaranteed."})
-    # All event footprints survive Thursday/weekend rules, not just the first football game.
-    for event in events:
-        start, end = event["start"], event["end"]
-        if event["all_day"]:
-            label = "Time TBD / all day"
-        else:
-            lead = timedelta(hours=3 if event["tier"] == "CRITICAL IMPACT" else 1)
-            label = window(start - lead, start)
+            timeline.append({
+                "time": "8:00 PM onward", "app": "XL / Comfort",
+                "action": "Check downtown demand and legal pickup locations before moving; premiums are not guaranteed.",
+                "_minute": 20 * 60,
+            })
+
+    if include_event_cues:
         actions = {
-            "CRITICAL IMPACT": "Expect Michigan Stadium approach congestion. Consider the east-side hotel corridor; confirm traffic before using Stadium / Main. Do not queue at closed roads.",
-            "YPSI GAME DAY": "Expect venue arrivals around EMU. Check Hewitt / Huron traffic and use signed pickup zones.",
-            "INDOOR ARENA": "Expect concentrated arena arrivals. Check State / Stadium / Packard and avoid blocking venue entrances.",
-            "PERFORMING ARTS": "Expect downtown curb demand near the performance. Use legal pickup zones and avoid idling on State / Liberty / North University.",
-            "NEIGHBORHOOD / SCHOOL": "Allow for neighborhood and school traffic. Keep school entrances, bus lanes and pedestrian crossings clear.",
+            "CRITICAL IMPACT": "Large crowds and traffic disruption possible near Michigan Stadium. Check real app rates, road closures and legal pickup areas before repositioning.",
+            "YPSI GAME DAY": "Potential EMU arrival/departure demand; verify actual wait times, pricing and pickup routes before traveling.",
+            "INDOOR ARENA": "Event-related pickup potential near the arena; avoid blocked entrances and check actual driver demand.",
+            "PERFORMING ARTS": "Possible after-show pickups near downtown theaters; do not assume surge or a profitable repositioning trip.",
+            "NEIGHBORHOOD / SCHOOL": "Localized school or neighborhood congestion may occur; not a reliable standalone rideshare or delivery signal.",
         }
-        action = f"{event['name']} • {event['venue']}. {actions[event['tier']]}"
-        if end and not event["all_day"]:
-            action += f" Published end: {clock(end)}; recheck departure demand then."
-        else:
-            action += " End time unconfirmed; check the event before chasing departure demand."
-        timeline.append({"time": label, "app": event["tier"], "action": action})
-    return timeline
+        for event in events:
+            tier = event["tier"]
+            if tier == "NEIGHBORHOOD / SCHOOL" and not include_local:
+                continue
+            start, end = event["start"], event["end"]
+            if event["all_day"]:
+                label = "Time unconfirmed (optional context)"
+                sort_at = None
+            else:
+                lead = timedelta(hours=3 if tier == "CRITICAL IMPACT" else 1)
+                slot_start = start - lead
+                label = window(slot_start, start)
+                sort_at = slot_start.hour * 60 + slot_start.minute
+                if slot_start.date() < start.date():
+                    sort_at -= 24 * 60
+            action = f"{event['name']} • {event['venue']}. {actions[tier]}"
+            if end and not event["all_day"]:
+                action += f" Published end: {clock(end)}; recheck departure demand then."
+            else:
+                action += " End time unconfirmed; check the event before chasing departure demand."
+            timeline.append({"time": label, "app": f"{tier} · optional", "action": action,
+                             "_minute": sort_at})
+    # "None" signals unknown time and always sits after known windows.
+    timeline.sort(key=lambda item: (item["_minute"] is None,
+                                   item["_minute"] if item["_minute"] is not None else 10**9,
+                                   item["app"]))
+    return [{key: value for key, value in item.items() if key != "_minute"} for item in timeline]
 
 
 def render_weather(weather):
@@ -414,7 +604,7 @@ def main():
     [data-testid="stHorizontalBlock"]{flex-wrap:wrap}h1{font-size:1.85rem!important}}
     </style>''', unsafe_allow_html=True)
     st.title("🛞 Washtenaw Gig Pilot Pro")
-    st.caption("Ann Arbor ↔ Ypsilanti • Kia Telluride • 16 MPG")
+    st.caption("Favour (Ogbuefi) • Ann Arbor ↔ Ypsilanti • Kia Telluride • 16 MPG")
     with st.sidebar:
         st.header("Pilot settings")
         base = st.text_input("Base camp", BASE)
@@ -447,26 +637,42 @@ def main():
             events_data = fetch_live_events(selected_date, setting("EVENT_FEEDS_JSON", "[]"))
             weather = fetch_weather(selected_date)
         st.subheader("Regional event footprint")
-        st.caption("Known published events, not a guarantee of complete street activity. Impact labels are planning estimates.")
+        st.caption("Known published events, not a guarantee of complete street activity. School pages may expose only their currently displayed month; blocked or out-of-range feeds are marked unverified.")
         for note in events_data["notes"]:
             st.warning(note)
         events = events_data["events"]
+        major_events = [e for e in events if e["tier"] != "NEIGHBORHOOD / SCHOOL"]
+        local_events = [e for e in events if e["tier"] == "NEIGHBORHOOD / SCHOOL"]
         if not events:
             st.info("No matching events returned by available feeds. This does not confirm normal traffic.")
-        for event in events:
+        for event in major_events:
             with st.container(border=True):
-                st.caption(event["tier"])
+                st.caption(f"{event['tier']} · Advisory only")
                 st.write(f"**{event['name']}**")
                 st.write(f"{event['venue']} · {'Time TBD / all day' if event['all_day'] else clock(event['start'])}")
                 if event["url"]:
                     st.link_button("Event source", event["url"])
+        with st.expander(f"Neighborhood and school context ({len(local_events)}) • low-confidence"):
+            st.caption("Mostly a local traffic/congestion indicator, not a reliable gig surge forecast.")
+            for event in local_events:
+                st.write(f"**{event['name']}** · {event['venue']} · " +
+                         ("Time unconfirmed" if event["all_day"] else clock(event["start"])))
+                if event["url"]:
+                    st.link_button("Calendar source", event["url"])
         with st.expander("Event source coverage"):
             st.dataframe(events_data["coverage"], hide_index=True, use_container_width=True)
-            st.caption(f"Checked {events_data['checked'].strftime('%b %d %I:%M %p %Z')}. Athletics pages cover their published season; missing seasons or feeds are not evidence of no events.")
+            st.caption(f"Checked {events_data['checked'].strftime('%b %d %I:%M %p %Z')}. Empty or blocked calendars never mean no traffic. Open each official source from its URL if coverage is incomplete.")
         st.subheader("Position & Routing Roadmap")
-        st.caption(selected_date.strftime("%A, %B %d, %Y"))
+        st.caption(selected_date.strftime("%A, %B %d, %Y") +
+                   " • Earliest windows first. Event cues are optional, not scheduled shifts.")
+        include_events = st.checkbox("Include major-event cues in roadmap", value=True,
+                                     help="Advisory only. No event guarantees a surge or profitable trip.")
+        include_local = st.checkbox("Also show school and neighborhood cues", value=False,
+                                    disabled=not include_events,
+                                    help="These signals mainly indicate localized congestion, not strong gig demand.")
         render_weather(weather)
-        for slot in generate_schedule(events, base, selected_date.weekday()):
+        for slot in generate_schedule(events, base, selected_date.weekday(),
+                                      include_event_cues=include_events, include_local=include_local):
             with st.expander(f"{slot['time']} · {slot['app']}", expanded=True):
                 st.write(slot["action"])
     with tab2:
