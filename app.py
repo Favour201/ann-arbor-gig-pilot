@@ -682,6 +682,40 @@ def greeting_for_hour(hour):
     return f"{part}, Ogbuefi"
 
 
+ROADMAP_VIEWS = ("All", "Driving", "Traffic & events")
+
+
+def filter_roadmap(slots, view="All", *, selected_date=None, now=None, remaining=False):
+    """Filter without changing chronology; unknown-time events remain unscheduled."""
+    if view not in ROADMAP_VIEWS:
+        raise ValueError("Unknown roadmap filter")
+    if view == "Driving":
+        filtered = [slot for slot in slots if slot["app"] in ("Delivery", "XL / Comfort")]
+    elif view == "Traffic & events":
+        filtered = [slot for slot in slots if slot["app"] not in ("Delivery", "XL / Comfort")]
+    else:
+        filtered = list(slots)
+    if not remaining:
+        return filtered
+    if selected_date is None or now is None:
+        raise ValueError("Date and current time are required")
+    today = now.astimezone(TZ).date()
+    if selected_date < today:
+        return []
+    if selected_date > today:
+        return filtered
+    minute = now.astimezone(TZ).hour * 60 + now.astimezone(TZ).minute
+    return [slot for slot in filtered
+            if slot["end_minute"] is None or slot["end_minute"] >= minute]
+
+
+def next_planning_window(slots, selected_date, now):
+    """First active or forthcoming timed window; never assigns times to TBDs."""
+    remaining = filter_roadmap(slots, selected_date=selected_date,
+                               now=now, remaining=True)
+    return next((slot for slot in remaining if slot["start_minute"] is not None), None)
+
+
 def roadmap_title(slot):
     """Compact headline, leaving full routing guidance in an expander."""
     if slot["app"] == "Delivery":
