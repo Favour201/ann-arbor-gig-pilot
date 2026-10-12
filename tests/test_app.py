@@ -110,3 +110,29 @@ def test_offline_ui_and_grader():
         next(b for b in at.button if b.label == 'Grade my week').click().run()
         assert not at.exception
         assert any('After-fuel earnings' in x.value for x in at.success)
+
+
+def test_driver_fuel_history_and_expiry():
+    now = NOW
+    fresh = {"station_id": "costco_airport", "regular": 3.25, "observed_at": now.isoformat(), "paid": True}
+    stale = {"station_id": "bp_washtenaw", "regular": 2.50, "observed_at": (now-timedelta(days=2)).isoformat()}
+    invalid = {"station_id": "costco_airport", "regular": float("nan"), "observed_at": now.isoformat()}
+    history = app.validated_driver_history([fresh, stale, invalid], now)
+    assert len(history) == 2
+    fuel = {"stations": [{**s, "price": None, "observed_at": None, "source": "Station reference"}
+                         for s in app.STATIONS], "notes": [], "checked": now}
+    merged = app.merge_driver_reports(fuel, history, now)
+    current = app.current_quotes(merged, now)
+    assert len(current) == 1
+    assert current[0]["id"] == "costco_airport"
+    assert current[0]["price"] == 3.25
+
+
+def test_detour_net_savings_and_no_false_profit():
+    result = app.fuel_detour_value(3.50, 3.30, 15, 8)
+    assert result["pump_savings"] == 3.00
+    assert result["detour_fuel_cost"] == 1.65
+    assert result["net_savings"] == 1.35
+    assert app.fuel_detour_value(3.00, 3.30, 15, 8)["net_savings"] < 0
+    with pytest.raises(ValueError):
+        app.fuel_detour_value(3.5, 3.3, 15, -1)
