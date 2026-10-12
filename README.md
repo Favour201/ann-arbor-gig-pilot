@@ -1,6 +1,6 @@
 # Washtenaw Gig Pilot Pro
 
-Midnight Pilot is a mobile-first Streamlit driver command center for Ogbuefi, operating a 16 MPG Kia Telluride in the Ann Arbor / Ypsilanti corridor. Application logic stays in `app.py`.
+Graphite Pilot is a mobile-first Streamlit driver command center for Ogbuefi, operating a 16 MPG Kia Telluride in the Ann Arbor / Ypsilanti corridor. Application logic stays in `app.py`.
 
 ## Run
 
@@ -11,12 +11,12 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Midnight Pilot design
+## Graphite Pilot design
 
-- **Theme:** dark navy/charcoal native Streamlit theme in `.streamlit/config.toml`, readable slate cards, soft blue highlights, strong keyboard focus indicators and reduced-motion support. The CSS is in `app.py` so the deployment requires no additional UI package.
+- **Theme:** premium monochrome graphite/near-black native Streamlit theme in `.streamlit/config.toml`, charcoal cards, warm-silver accents, clear keyboard-focus indicators and reduced-motion support. Amber remains exclusively for weather caution. CSS stays in `app.py` and requires no new dependency.
 - **Greeting:** uses the Eastern local hour to display “Good morning, Ogbuefi”, “Good afternoon, Ogbuefi” or “Good evening, Ogbuefi”. The dashboard no longer uses another form of address.
 - **First screen:** date selector and refresh button, followed by compact **checked gas**, **published events**, and **NWS hazard-trigger** cards. Unknown fuel/forecast states remain unknown—no prices or false clear-weather claims.
-- **Roadmap first:** tap-friendly chronological timeline cards; detailed routing guidance sits under “Routing details” instead of expanding everything on launch. Major-event and school-traffic filters remain available in a single collapsed panel. School avoidance is still enabled by default.
+- **Roadmap first:** tap-friendly chronological timeline cards; details remain under “Routing details”. A segmented control lets you show **All / Driving / Traffic & events**, while **Show remaining windows only** removes finished windows on today’s date but retains active windows and untimed TBD events. A noncommittal **current / next listed window** card surfaces the earliest still-relevant timed window for the selected date. The major-event and school-traffic toggles remain independent, with school avoidance enabled by default.
 - **Less clutter:** event lists and source diagnostics live in optional expanders below the roadmap. GasBuddy links and the manual fuel entry live in **Fuel quick check**. Profit grader remains in its own tab, with the same 16 MPG calculations.
 
 ## Live systems and actual coverage
@@ -58,4 +58,4 @@ pip install pytest
 python -m pytest -q
 ```
 
-Tests cover time-aware Ogbuefi greetings, Midnight Pilot CSS markers and compact timeline headings alongside gas-price and profit math, NWS and events, officially confirmed kickoff updates, chronological roadmaps and offline Streamlit rendering.
+Tests cover time-aware Ogbuefi greetings, graphite style markers, three roadmap views, remaining-window and up-next boundaries (including active and TBD events), compact timeline headings, gas-price and profit math, NWS and events, officially confirmed kickoff updates, chronological roadmaps and offline Streamlit rendering.

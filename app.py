@@ -594,10 +594,10 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
         timeline.extend([
             {"time": "6:00 PM – 8:30 PM", "app": "Delivery",
              "action": "Thursday dinner: consider compact Carpenter / Washtenaw restaurant loops; target $2.50 per mile.",
-             "_minute": 18 * 60},
+             "_minute": 18 * 60, "_end_minute": 20 * 60 + 30},
             {"time": "8:30 PM onward", "app": "XL / Comfort",
              "action": "Check actual app demand around South U / Packard before repositioning.",
-             "_minute": 20 * 60 + 30},
+             "_minute": 20 * 60 + 30, "_end_minute": 24 * 60},
         ])
     else:
         is_sunday = day_of_week == 6
@@ -606,12 +606,13 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
             "app": "Delivery",
             "action": f"Start from {base_camp}. Favor short Carpenter / Washtenaw loops and account for unpaid return miles.",
             "_minute": 16 * 60 + 30 if is_sunday else 17 * 60,
+            "_end_minute": 21 * 60 + 30 if is_sunday else 20 * 60,
         })
         if day_of_week in (4, 5):
             timeline.append({
                 "time": "8:00 PM onward", "app": "XL / Comfort",
                 "action": "Check downtown demand and legal pickup locations before moving; premiums are not guaranteed.",
-                "_minute": 20 * 60,
+                "_minute": 20 * 60, "_end_minute": 24 * 60,
             })
 
     for event in events:
@@ -622,6 +623,7 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
         if event["all_day"]:
             label = "Kickoff TBD • timing unconfirmed" if event_time_label(event) == "Kickoff TBD" else "Time TBD • timing unconfirmed"
             sort_at = None
+            end_at = None
         else:
             lead = timedelta(hours=3 if event["tier"] == "CRITICAL IMPACT" else 1)
             slot_start = start - lead
@@ -629,6 +631,7 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
             sort_at = slot_start.hour * 60 + slot_start.minute
             if slot_start.date() < start.date():
                 sort_at -= 24 * 60
+            end_at = sort_at + int(lead.total_seconds() / 60)
         signal = event_impact(event)
         action = (f"{event['name']} • {event['venue']}. "
                   f"Traffic: {signal['traffic']} "
@@ -640,11 +643,15 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
             action += " Departure time unconfirmed; do not assume a fixed exit window."
         tag = ("NEIGHBORHOOD / SCHOOL · traffic advisory" if local
                else f"{event['tier']} · demand + traffic advisory")
-        timeline.append({"time": label, "app": tag, "action": action, "_minute": sort_at})
+        timeline.append({"time": label, "app": tag, "action": action,
+                         "_minute": sort_at, "_end_minute": end_at})
     timeline.sort(key=lambda item: (item["_minute"] is None,
                                    item["_minute"] if item["_minute"] is not None else 10**9,
                                    item["app"]))
-    return [{key: value for key, value in item.items() if key != "_minute"} for item in timeline]
+    return [{**{key: value for key, value in item.items()
+                if key not in ("_minute", "_end_minute")},
+             "start_minute": item["_minute"], "end_minute": item["_end_minute"]}
+            for item in timeline]
 
 
 def render_weather(weather):
@@ -675,6 +682,40 @@ def greeting_for_hour(hour):
     return f"{part}, Ogbuefi"
 
 
+ROADMAP_VIEWS = ("All", "Driving", "Traffic & events")
+
+
+def filter_roadmap(slots, view="All", *, selected_date=None, now=None, remaining=False):
+    """Filter without changing chronology; unknown-time events remain unscheduled."""
+    if view not in ROADMAP_VIEWS:
+        raise ValueError("Unknown roadmap filter")
+    if view == "Driving":
+        filtered = [slot for slot in slots if slot["app"] in ("Delivery", "XL / Comfort")]
+    elif view == "Traffic & events":
+        filtered = [slot for slot in slots if slot["app"] not in ("Delivery", "XL / Comfort")]
+    else:
+        filtered = list(slots)
+    if not remaining:
+        return filtered
+    if selected_date is None or now is None:
+        raise ValueError("Date and current time are required")
+    today = now.astimezone(TZ).date()
+    if selected_date < today:
+        return []
+    if selected_date > today:
+        return filtered
+    minute = now.astimezone(TZ).hour * 60 + now.astimezone(TZ).minute
+    return [slot for slot in filtered
+            if slot["end_minute"] is None or slot["end_minute"] >= minute]
+
+
+def next_planning_window(slots, selected_date, now):
+    """First active or forthcoming timed window; never assigns times to TBDs."""
+    remaining = filter_roadmap(slots, selected_date=selected_date,
+                               now=now, remaining=True)
+    return next((slot for slot in remaining if slot["start_minute"] is not None), None)
+
+
 def roadmap_title(slot):
     """Compact headline, leaving full routing guidance in an expander."""
     if slot["app"] == "Delivery":
@@ -687,48 +728,49 @@ def roadmap_title(slot):
 MIDNIGHT_CSS = """
 <style>
 :root {color-scheme:dark;}
-html,body,[data-testid="stAppViewContainer"],.stApp {background:#111B2A !important;color:#F0F6FF !important;}
+html,body,[data-testid="stAppViewContainer"],.stApp {background:#101113 !important;color:#F1F0ED !important;}
 [data-testid="stHeader"] {background:rgba(17,27,42,.94) !important;}
-[data-testid="stSidebar"] {background:#162338 !important;}
+[data-testid="stSidebar"] {background:#17181A !important;}
 .block-container {max-width:960px !important;padding-top:1.25rem !important;padding-bottom:3rem !important;}
-h1,h2,h3 {color:#F8FAFF !important;letter-spacing:-.02em;}
+h1,h2,h3 {color:#FAF9F6 !important;letter-spacing:-.02em;}
 h2 {font-size:1.33rem !important;}
-[data-testid="stCaptionContainer"],small {color:#AEBDD2 !important;}
+[data-testid="stCaptionContainer"],small {color:#BCBAB5 !important;}
 [data-testid="stVerticalBlockBorderWrapper"] {
-  background:#1B2A3F;border:1px solid #344962 !important;border-radius:15px !important;
+  background:#202124;border:1px solid #3A3B3F !important;border-radius:15px !important;
 }
-[data-testid="stMetricLabel"] p {color:#B9C9DE !important;font-size:.81rem;}
-[data-testid="stMetricValue"] {font-size:1.55rem !important;color:#FBFDFF !important;}
-[data-testid="stTabs"] [data-baseweb="tab-list"] {gap:.6rem;border-bottom:1px solid #30445F;}
+[data-testid="stMetricLabel"] p {color:#C3C1BC !important;font-size:.81rem;}
+[data-testid="stMetricValue"] {font-size:1.55rem !important;color:#F7F6F2 !important;}
+[data-testid="stTabs"] [data-baseweb="tab-list"] {gap:.6rem;border-bottom:1px solid #37383C;}
 [data-testid="stTabs"] button[data-baseweb="tab"] {
-  min-height:48px !important;color:#B7CBE4 !important;font-weight:650 !important;
+  min-height:48px !important;color:#C2C0BA !important;font-weight:650 !important;
 }
 [data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
-  color:#A1CFFF !important;background:#1D2E45 !important;
+  color:#E4DFD5 !important;background:#2B2B2E !important;
 }
 [data-testid="stExpander"] {
-  border:1px solid #35465F !important;border-radius:12px !important;background:#19283D;
+  border:1px solid #3E3E41 !important;border-radius:12px !important;background:#1C1D1F;
 }
-[data-testid="stExpander"] summary {min-height:46px;font-weight:560;color:#EAF2FF;}
+[data-testid="stExpander"] summary {min-height:46px;font-weight:560;color:#ECEAE4;}
 .stButton button,.stLinkButton a,[data-testid="stFormSubmitButton"] button {
   min-height:46px !important;border-radius:10px !important;font-weight:650 !important;
 }
 button:focus-visible,a:focus-visible,input:focus-visible,
 [data-testid="stExpander"] summary:focus-visible {
-  outline:3px solid #8BC8FF !important;outline-offset:3px !important;
+  outline:3px solid #DED8CC !important;outline-offset:3px !important;
 }
 [data-testid="stAlert"] {border-radius:11px;}
 .pilot-hero {
-  border:1px solid #32506F;border-radius:20px;
-  background:linear-gradient(120deg,#223954 0%,#17283D 60%,#1E3451 100%);
+  border:1px solid #49494B;border-radius:20px;
+  background:linear-gradient(120deg,#303034 0%,#1B1C1F 60%,#262729 100%);
   padding:22px 24px 20px;margin-bottom:.75rem;
 }
-.pilot-eyebrow {color:#AAC9EB;font-size:.74rem;font-weight:750;letter-spacing:.13em;text-transform:uppercase;}
-.pilot-greeting {color:#FCFDFF;font-size:clamp(1.55rem,3.8vw,2.18rem);font-weight:790;line-height:1.2;margin:.42rem 0;}
-.pilot-subtitle {color:#BED0E7;font-size:.86rem;line-height:1.5;}
-.pilot-line {width:72px;height:3px;border-radius:9px;background:#85BFFF;margin-top:16px;}
-.pilot-kicker {color:#94C8FF;font-size:.75rem;font-weight:770;letter-spacing:.1em;text-transform:uppercase;}
-.pilot-timeline-time {color:#9CCFFF;font-size:.93rem;font-weight:750;}
+.pilot-eyebrow {color:#D4D0C7;font-size:.74rem;font-weight:750;letter-spacing:.13em;text-transform:uppercase;}
+.pilot-greeting {color:#FDFCF9;font-size:clamp(1.55rem,3.8vw,2.18rem);font-weight:790;line-height:1.2;margin:.42rem 0;}
+.pilot-subtitle {color:#C7C5BF;font-size:.86rem;line-height:1.5;}
+.pilot-line {width:72px;height:2px;border-radius:9px;background:#B7B1A6;margin-top:16px;}
+.pilot-kicker {color:#D5D0C6;font-size:.75rem;font-weight:770;letter-spacing:.1em;text-transform:uppercase;}
+.pilot-timeline-time {color:#E1DCD1;font-size:.93rem;font-weight:750;}
+.pilot-next {border-left:3px solid #B7B1A6;padding-left:10px;}
 .weather-premium {
   background:#4A3718 !important;color:#FFECC2 !important;
   border:1px solid #C99B3D !important;border-radius:12px;
@@ -741,6 +783,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,
   .pilot-subtitle {font-size:.8rem;}
   [data-testid="stMetricValue"] {font-size:1.3rem !important;}
   [data-testid="stHorizontalBlock"] {gap:.45rem !important;}
+  [data-testid="stSegmentedControl"] [role="radiogroup"] {flex-wrap:wrap;}
 }
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after {transition-duration:0s !important;animation-duration:0s !important;}
@@ -827,7 +870,7 @@ def main():
     with tab1:
         st.subheader("Position & Routing Roadmap")
         st.caption(selected_date.strftime("%A, %B %d, %Y") +
-                   " · Earliest windows first · Event cues are advisory")
+                   " · Chronological windows · Filters are optional")
         render_weather(weather)
         with st.expander("⚙️ Roadmap filters", expanded=False):
             include_events = st.checkbox("Include major-event demand + traffic cues", value=True,
@@ -837,7 +880,29 @@ def main():
 
         schedule = generate_schedule(events, base, selected_date.weekday(),
                                      include_event_cues=include_events, include_local=include_local)
-        for slot in schedule:
+        upcoming = next_planning_window(schedule, selected_date, now)
+        with st.container(border=True):
+            st.caption("CURRENT / NEXT LISTED WINDOW" if selected_date == now.date()
+                       else "FIRST PLANNING WINDOW" if selected_date > now.date()
+                       else "HISTORICAL DATE")
+            if upcoming:
+                st.markdown(f"**{roadmap_title(upcoming)}** · {upcoming['time']}")
+                st.caption("Potential planning window, not an obligation to drive.")
+            else:
+                st.caption("No remaining timed windows on this date; any TBD events are listed below."
+                           if selected_date >= now.date() else
+                           "Choose today or a future date for an upcoming window.")
+
+        st.segmented_control("Roadmap focus", ROADMAP_VIEWS,
+                             default="All", key="roadmap_view",
+                             help="View regular driving windows, traffic/event cues, or both.")
+        remaining_only = st.toggle("Show remaining windows only", value=False,
+                                   help="On today's date, hide windows that have already ended. TBD events remain unassigned.")
+        displayed_schedule = filter_roadmap(
+            schedule, st.session_state["roadmap_view"],
+            selected_date=selected_date, now=now, remaining=remaining_only)
+        st.caption(f"{len(displayed_schedule)} windows shown · Chronological order preserved")
+        for slot in displayed_schedule:
             with st.container(border=True):
                 left, right = st.columns([1.15, 2.7], gap="small", vertical_alignment="top")
                 with left:
@@ -848,8 +913,8 @@ def main():
                     st.caption(slot["app"])
                 with st.expander("Routing details", expanded=False):
                     st.write(slot["action"])
-        if not schedule:
-            st.info("No available roadmap windows for these filters.")
+        if not displayed_schedule:
+            st.info("No planning windows match this view or date. Try All or turn off Remaining only.")
 
         st.subheader("Regional event footprint")
         st.caption("Published schedules identify possible crowds and congestion, not guaranteed surge.")

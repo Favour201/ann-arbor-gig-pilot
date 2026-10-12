@@ -239,6 +239,60 @@ def test_compact_roadmap_headlines_preserve_details():
 
 def test_dark_theme_css_and_mobile_ux_markers():
     assert "pilot-greeting" in app.MIDNIGHT_CSS
-    assert "#111B2A" in app.MIDNIGHT_CSS
+    assert "#101113" in app.MIDNIGHT_CSS
+    assert "#8BC8FF" not in app.MIDNIGHT_CSS
+    assert "#84C0FF" not in app.MIDNIGHT_CSS
     assert "@media(max-width:600px)" in app.MIDNIGHT_CSS
     assert ":focus-visible" in app.MIDNIGHT_CSS
+
+
+
+def test_focus_views_keep_chronology_and_tbd():
+    football = app.event_record("Michigan Football", "Michigan Stadium",
+                                "2026-10-15T15:30:00-04:00", None, "Fixture")
+    pioneer = app.event_record("Pioneer Fall Choir Concert", "Pioneer High School",
+                                "2026-10-15T19:00:00-04:00", None, "Fixture")
+    untimed = app.event_record("Michigan Football kickoff", "Michigan Stadium",
+                                "2026-10-15", None, "Fixture", all_day=True)
+    timeline = app.generate_schedule([pioneer, football, untimed], app.BASE, 3)
+    assert len(app.filter_roadmap(timeline, "All")) == len(timeline)
+    driving = app.filter_roadmap(timeline, "Driving")
+    alerts = app.filter_roadmap(timeline, "Traffic & events")
+    assert len(driving) == 2
+    assert len(driving) + len(alerts) == len(timeline)
+    assert alerts[0]["time"] == "12:30 PM – 3:30 PM"
+    assert alerts[-1]["start_minute"] is None
+    assert alerts[-1]["end_minute"] is None
+    import pytest
+    with pytest.raises(ValueError):
+        app.filter_roadmap(timeline, "Unknown")
+
+
+def test_remaining_filter_keeps_active_does_not_guess_tbd():
+    thursday = date(2026, 10, 15)
+    moment = datetime(2026, 10, 15, 19, 0, tzinfo=app.TZ)
+    event = app.event_record("Michigan Football kickoff", "Michigan Stadium",
+                             "2026-10-15", None, "Fixture", all_day=True)
+    slots = app.generate_schedule([event], app.BASE, 3)
+    remaining = app.filter_roadmap(slots, selected_date=thursday, now=moment, remaining=True)
+    assert not any(s["time"] == "6:00 PM – 8:30 PM" and s["end_minute"] < 19*60
+                   for s in remaining)
+    assert any(s["time"] == "6:00 PM – 8:30 PM" for s in remaining)
+    assert any(s["start_minute"] is None for s in remaining)
+    upcoming = app.next_planning_window(slots, thursday, moment)
+    assert upcoming["time"] == "6:00 PM – 8:30 PM"
+    later = datetime(2026, 10, 15, 23, 55, tzinfo=app.TZ)
+    assert app.next_planning_window(slots, thursday, later)["time"] == "8:30 PM onward"
+    after_midnight = datetime(2026, 10, 16, 0, 5, tzinfo=app.TZ)
+    assert app.next_planning_window(slots, thursday, after_midnight) is None
+    assert app.next_planning_window(slots, date(2026, 10, 14), moment) is None
+    assert app.next_planning_window(slots, date(2026, 10, 16), moment) is not None
+
+
+def test_graphite_native_theme_avoids_blue():
+    from pathlib import Path
+    config = Path(".streamlit/config.toml").read_text()
+    assert '#101113' in config
+    assert '#CFCAC1' in config
+    assert '#84C0FF' not in config
+    assert "ROADMAP_VIEWS" not in config
