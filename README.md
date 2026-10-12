@@ -21,13 +21,39 @@ The three recommendations are clearly identified as optional and are chronologic
 
 In `.streamlit/config.toml`, `[client] toolbarMode = "minimal"` reduces optional top-right controls. Narrow CSS hides only Streamlit's optional toolbar and gives the custom graphite hero extra top clearance while **preserving the collapsed-sidebar button** and debugging/management access through Streamlit Community Cloud's workspace. This intentionally avoids hiding the entire Streamlit header or relying on fragile full-page embedding tricks. Streamlit Cloud can still show platform-managed UI outside the app's control.
 
+## Focused three-workspace navigation
+
+The landing experience now opens **Drive** by default. This shows the selected date,
+a compact next-step recommendation and the chronological driving windows. Tapping a
+window reveals its full routing notes. Michigan confirmed game-day drive / rest /
+return shifts, optional game-day timing sliders, NWS warnings, and the current
+traffic-caution summary are retained. There is no gas form, feed table or sprawling
+event list on this first screen.
+
+The top **Workspace** switch moves between:
+
+- **Drive:** recommendations first, optional "Adjust driving plan" controls and a
+  "Hide finished windows" switch. A shortcut opens Events & Traffic.
+- **Events & Traffic:** major venues and school/neighborhood traffic displayed in
+  distinct interactive sections with event links and NWS detail. The full source
+  status and timestamps are hidden inside **Advanced · Feed diagnostics**, only
+  for troubleshooting, never on the Drive opening screen.
+- **Earnings & Fuel:** GasBuddy Ann Arbor/Ypsilanti links, manual checked regular
+  fuel price and Weekly Profit Grader at 16 MPG. This view deliberately does not
+  call the live event or weather feeds, making finance work simpler.
+
+Navigation uses native Streamlit state, not a new host or additional dependency.
+The selected driving date and fuel input survive normal in-app navigation within
+the current session. Selecting a new date refreshes the date-scoped event/forecast
+lookups according to their existing caches.
+
 ## Graphite Pilot design
 
 - **Theme:** premium monochrome graphite/near-black native Streamlit theme in `.streamlit/config.toml`, charcoal cards, warm-silver accents, clear keyboard-focus indicators and reduced-motion support. Amber remains exclusively for weather caution. CSS stays in `app.py` and requires no new dependency.
 - **Greeting:** uses the Eastern local hour to display “Good morning, Ogbuefi”, “Good afternoon, Ogbuefi” or “Good evening, Ogbuefi”. The dashboard no longer uses another form of address.
-- **First screen:** date selector and refresh button, followed by compact **checked gas**, **published events**, and **NWS hazard-trigger** cards. Unknown fuel/forecast states remain unknown—no prices or false clear-weather claims.
-- **Roadmap first:** tap-friendly chronological timeline cards; details remain under “Routing details”. A segmented control lets you show **All / Driving / Traffic & events**, while **Show remaining windows only** removes finished windows on today’s date but retains active windows and untimed TBD events. A noncommittal **current / next listed window** card surfaces the earliest still-relevant timed window for the selected date. The major-event and school-traffic toggles remain independent, with school avoidance enabled by default.
-- **Less clutter:** event lists and source diagnostics live in optional expanders below the roadmap. GasBuddy links and the manual fuel entry live in **Fuel quick check**. Profit grader remains in its own tab, with the same 16 MPG calculations.
+- **First screen:** a compact date selector and refresh button, a next-step card, and only driving windows and relevant hazards. Fuel and full event/source details are intentionally in other workspaces; unknown weather remains unknown.
+- **Roadmap first:** tap-friendly chronological driving cards with expandable routing detail. Finished windows may be hidden; game-day timing and event/traffic inclusion remain adjustable. All published event-specific traffic details are available under Events & Traffic rather than crowding the daily plan.
+- **Less clutter:** Only one workspace renders at a time. Full event listings and advanced feed diagnostics appear solely in Events & Traffic. GasBuddy, the manually checked price and the profit grader live together under Earnings & Fuel.
 
 ## Live systems and actual coverage
 
@@ -68,4 +94,4 @@ pip install pytest
 python -m pytest -q
 ```
 
-Tests cover time-aware Ogbuefi greetings, graphite style markers, three roadmap views, remaining-window and up-next boundaries (including active and TBD events), compact timeline headings, gas-price and profit math, NWS and events, officially confirmed kickoff updates, chronological roadmaps and offline Streamlit rendering. Smart-game Saturday 3:30 PM split shifts, preference overrides, TBD/away fallback, early-kickoff behavior and toolbar config are regression-tested.
+Tests cover time-aware Ogbuefi greetings, graphite styling, three-workspace navigation, hidden feed diagnostics, no unnecessary event/weather fetching in Earnings & Fuel, remaining-window and next-step boundaries, gas-price/profit math, NWS/events, officially confirmed kickoff updates, chronological roadmaps and offline Streamlit rendering. Smart-game Saturday 3:30 PM split shifts, preference overrides, TBD/away fallback, early-kickoff behavior and toolbar config are regression-tested.
