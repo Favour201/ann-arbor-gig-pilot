@@ -795,9 +795,11 @@ MIDNIGHT_CSS = """
 <style>
 :root {color-scheme:dark;}
 html,body,[data-testid="stAppViewContainer"],.stApp {background:#101113 !important;color:#F1F0ED !important;}
-[data-testid="stHeader"] {background:rgba(17,27,42,.94) !important;}
+[data-testid="stHeader"] {background:transparent !important;box-shadow:none !important;}
+/* Keep the sidebar toggle accessible. Only remove the optional top-right toolbar. */
+[data-testid="stToolbar"] {display:none !important;}
 [data-testid="stSidebar"] {background:#17181A !important;}
-.block-container {max-width:960px !important;padding-top:1.25rem !important;padding-bottom:3rem !important;}
+.block-container {max-width:960px !important;padding-top:3.25rem !important;padding-bottom:3rem !important;}
 h1,h2,h3 {color:#FAF9F6 !important;letter-spacing:-.02em;}
 h2 {font-size:1.33rem !important;}
 [data-testid="stCaptionContainer"],small {color:#BCBAB5 !important;}
@@ -844,7 +846,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 }
 .weather-premium strong,.weather-premium small {color:#FFE9B3 !important;}
 @media(max-width:600px){
-  .block-container {padding:.85rem .85rem 2.5rem !important;}
+  .block-container {padding:3.45rem .85rem 2.5rem !important;}
   .pilot-hero {padding:18px 16px;border-radius:16px;}
   .pilot-subtitle {font-size:.8rem;}
   [data-testid="stMetricValue"] {font-size:1.3rem !important;}
@@ -938,14 +940,31 @@ def main():
         st.caption(selected_date.strftime("%A, %B %d, %Y") +
                    " · Chronological windows · Filters are optional")
         render_weather(weather)
-        with st.expander("⚙️ Roadmap filters", expanded=False):
+        home_game = next((ev for ev in events if selected_date.weekday() in (5, 6)
+                          and is_confirmed_michigan_home_game(ev)), None)
+        smart_game_day = home_game is not None
+        stop_buffer = 45
+        return_delay = 2.0
+        with st.expander("⚙️ Roadmap filters & game-day preferences", expanded=False):
             include_events = st.checkbox("Include major-event demand + traffic cues", value=True,
                                          help="Events do not guarantee profitable rides or delivery requests.")
             include_local = st.checkbox("Show school / neighborhood traffic advisories", value=True,
                                         help="Traffic avoidance cues independent of major-event targeting.")
-
-        schedule = generate_schedule(events, base, selected_date.weekday(),
-                                     include_event_cues=include_events, include_local=include_local)
+            if home_game is not None:
+                smart_game_day = st.checkbox("Recommend drive → rest → return for Michigan game", value=True,
+                                             help="Split shifts are recommendations based on the confirmed kickoff, not predictions of surge.")
+                if smart_game_day:
+                    stop_buffer = st.slider("Stop before kickoff (minutes)", 30, 60, 45, 15)
+                    return_delay = st.slider("Return after kickoff (hours)", 1.0, 4.0, 2.0, 0.5)
+        if home_game is not None and smart_game_day:
+            st.caption(f"🏈 Confirmed {clock(home_game['start'])} kickoff · "
+                       "Suggested split shift below. Adjust its timing in Roadmap filters. "
+                       "Always verify live offers and traffic.")
+        schedule = generate_schedule(
+            events, base, selected_date.weekday(),
+            include_event_cues=include_events, include_local=include_local,
+            smart_game_day=smart_game_day, stop_buffer_minutes=stop_buffer,
+            return_after_hours=return_delay)
         upcoming = next_planning_window(schedule, selected_date, now)
         with st.container(border=True):
             st.caption("CURRENT / NEXT LISTED WINDOW" if selected_date == now.date()
