@@ -756,9 +756,9 @@ def filter_roadmap(slots, view="All", *, selected_date=None, now=None, remaining
     if view not in ROADMAP_VIEWS:
         raise ValueError("Unknown roadmap filter")
     if view == "Driving":
-        filtered = [slot for slot in slots if slot["app"] in ("Delivery", "XL / Comfort")]
+        filtered = [slot for slot in slots if slot["app"] in ("Delivery", "XL / Comfort", "Break / Reset")]
     elif view == "Traffic & events":
-        filtered = [slot for slot in slots if slot["app"] not in ("Delivery", "XL / Comfort")]
+        filtered = [slot for slot in slots if slot["app"] not in ("Delivery", "XL / Comfort", "Break / Reset")]
     else:
         filtered = list(slots)
     if not remaining:
@@ -784,6 +784,8 @@ def next_planning_window(slots, selected_date, now):
 
 def roadmap_title(slot):
     """Compact headline, leaving full routing guidance in an expander."""
+    if slot.get("title"):
+        return slot["title"]
     if slot["app"] == "Delivery":
         return "Delivery window"
     if slot["app"] == "XL / Comfort":
