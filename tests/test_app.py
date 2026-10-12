@@ -93,6 +93,9 @@ def test_marquee_official_card_and_selected_date():
     assert found[0]["name"] == "Kenny Wayne Shepherd"
     assert found[0]["tier"] == "PERFORMING ARTS"
     assert (found[0]["start"].hour, found[0]["start"].minute) == (20, 0)
+    # A yearless event must not be assigned to whichever year the driver selects.
+    unknown_year = "<article><h3>Future show</h3><p>Saturday, February 6 at 8:00 PM</p></article>"
+    assert app.parse_marquee_events(unknown_year, date(2026, 2, 6), "https://marquee-arts.org/live-events/") == []
 
 
 def test_eventlink_local_only_and_no_invented_tbd_start():
