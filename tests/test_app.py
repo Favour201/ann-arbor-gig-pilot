@@ -282,7 +282,9 @@ def test_remaining_filter_keeps_active_does_not_guess_tbd():
     upcoming = app.next_planning_window(slots, thursday, moment)
     assert upcoming["time"] == "6:00 PM – 8:30 PM"
     later = datetime(2026, 10, 15, 23, 55, tzinfo=app.TZ)
-    assert app.next_planning_window(slots, thursday, later) is None
+    assert app.next_planning_window(slots, thursday, later)["time"] == "8:30 PM onward"
+    after_midnight = datetime(2026, 10, 16, 0, 5, tzinfo=app.TZ)
+    assert app.next_planning_window(slots, thursday, after_midnight) is None
     assert app.next_planning_window(slots, date(2026, 10, 14), moment) is None
     assert app.next_planning_window(slots, date(2026, 10, 16), moment) is not None
 
