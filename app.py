@@ -510,38 +510,68 @@ def window(start, end):
     return f"{clock(start)} – {clock(end)}{suffix}"
 
 
-def generate_schedule(events, base_camp, day_of_week):
+def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True, include_local=False):
+    """Chronological advisory roadmap. Unknown-time events sort last, never as midnight."""
     timeline = []
     if day_of_week == 3:
-        timeline.extend([{"time": "6:00 PM – 8:30 PM", "app": "Delivery", "action": "Thursday dinner: consider compact Carpenter / Washtenaw restaurant loops; target $2.50 per mile."},
-                         {"time": "8:30 PM onward", "app": "XL / Comfort", "action": "Check actual app demand around South U / Packard before repositioning."}])
+        timeline.extend([
+            {"time": "6:00 PM – 8:30 PM", "app": "Delivery",
+             "action": "Thursday dinner: consider compact Carpenter / Washtenaw restaurant loops; target $2.50 per mile.",
+             "_minute": 18 * 60},
+            {"time": "8:30 PM onward", "app": "XL / Comfort",
+             "action": "Check actual app demand around South U / Packard before repositioning.",
+             "_minute": 20 * 60 + 30},
+        ])
     else:
-        timeline.append({"time": "4:30 PM – 9:30 PM" if day_of_week == 6 else "5:00 PM – 8:00 PM", "app": "Delivery",
-                         "action": f"Start from {base_camp}. Favor short Carpenter / Washtenaw loops and account for unpaid return miles."})
+        is_sunday = day_of_week == 6
+        timeline.append({
+            "time": "4:30 PM – 9:30 PM" if is_sunday else "5:00 PM – 8:00 PM",
+            "app": "Delivery",
+            "action": f"Start from {base_camp}. Favor short Carpenter / Washtenaw loops and account for unpaid return miles.",
+            "_minute": 16 * 60 + 30 if is_sunday else 17 * 60,
+        })
         if day_of_week in (4, 5):
-            timeline.append({"time": "8:00 PM onward", "app": "XL / Comfort", "action": "Check downtown demand and legal pickup locations before moving; premiums are not guaranteed."})
-    # All event footprints survive Thursday/weekend rules, not just the first football game.
-    for event in events:
-        start, end = event["start"], event["end"]
-        if event["all_day"]:
-            label = "Time TBD / all day"
-        else:
-            lead = timedelta(hours=3 if event["tier"] == "CRITICAL IMPACT" else 1)
-            label = window(start - lead, start)
+            timeline.append({
+                "time": "8:00 PM onward", "app": "XL / Comfort",
+                "action": "Check downtown demand and legal pickup locations before moving; premiums are not guaranteed.",
+                "_minute": 20 * 60,
+            })
+
+    if include_event_cues:
         actions = {
-            "CRITICAL IMPACT": "Expect Michigan Stadium approach congestion. Consider the east-side hotel corridor; confirm traffic before using Stadium / Main. Do not queue at closed roads.",
-            "YPSI GAME DAY": "Expect venue arrivals around EMU. Check Hewitt / Huron traffic and use signed pickup zones.",
-            "INDOOR ARENA": "Expect concentrated arena arrivals. Check State / Stadium / Packard and avoid blocking venue entrances.",
-            "PERFORMING ARTS": "Expect downtown curb demand near the performance. Use legal pickup zones and avoid idling on State / Liberty / North University.",
-            "NEIGHBORHOOD / SCHOOL": "Allow for neighborhood and school traffic. Keep school entrances, bus lanes and pedestrian crossings clear.",
+            "CRITICAL IMPACT": "Large crowds and traffic disruption possible near Michigan Stadium. Check real app rates, road closures and legal pickup areas before repositioning.",
+            "YPSI GAME DAY": "Potential EMU arrival/departure demand; verify actual wait times, pricing and pickup routes before traveling.",
+            "INDOOR ARENA": "Event-related pickup potential near the arena; avoid blocked entrances and check actual driver demand.",
+            "PERFORMING ARTS": "Possible after-show pickups near downtown theaters; do not assume surge or a profitable repositioning trip.",
+            "NEIGHBORHOOD / SCHOOL": "Localized school or neighborhood congestion may occur; not a reliable standalone rideshare or delivery signal.",
         }
-        action = f"{event['name']} • {event['venue']}. {actions[event['tier']]}"
-        if end and not event["all_day"]:
-            action += f" Published end: {clock(end)}; recheck departure demand then."
-        else:
-            action += " End time unconfirmed; check the event before chasing departure demand."
-        timeline.append({"time": label, "app": event["tier"], "action": action})
-    return timeline
+        for event in events:
+            tier = event["tier"]
+            if tier == "NEIGHBORHOOD / SCHOOL" and not include_local:
+                continue
+            start, end = event["start"], event["end"]
+            if event["all_day"]:
+                label = "Time unconfirmed (optional context)"
+                sort_at = None
+            else:
+                lead = timedelta(hours=3 if tier == "CRITICAL IMPACT" else 1)
+                slot_start = start - lead
+                label = window(slot_start, start)
+                sort_at = slot_start.hour * 60 + slot_start.minute
+                if slot_start.date() < start.date():
+                    sort_at -= 24 * 60
+            action = f"{event['name']} • {event['venue']}. {actions[tier]}"
+            if end and not event["all_day"]:
+                action += f" Published end: {clock(end)}; recheck departure demand then."
+            else:
+                action += " End time unconfirmed; check the event before chasing departure demand."
+            timeline.append({"time": label, "app": f"{tier} · optional", "action": action,
+                             "_minute": sort_at})
+    # "None" signals unknown time and always sits after known windows.
+    timeline.sort(key=lambda item: (item["_minute"] is None,
+                                   item["_minute"] if item["_minute"] is not None else 10**9,
+                                   item["app"]))
+    return [{key: value for key, value in item.items() if key != "_minute"} for item in timeline]
 
 
 def render_weather(weather):
@@ -609,22 +639,38 @@ def main():
         for note in events_data["notes"]:
             st.warning(note)
         events = events_data["events"]
+        major_events = [e for e in events if e["tier"] != "NEIGHBORHOOD / SCHOOL"]
+        local_events = [e for e in events if e["tier"] == "NEIGHBORHOOD / SCHOOL"]
         if not events:
             st.info("No matching events returned by available feeds. This does not confirm normal traffic.")
-        for event in events:
+        for event in major_events:
             with st.container(border=True):
-                st.caption(event["tier"])
+                st.caption(f"{event['tier']} · Advisory only")
                 st.write(f"**{event['name']}**")
                 st.write(f"{event['venue']} · {'Time TBD / all day' if event['all_day'] else clock(event['start'])}")
                 if event["url"]:
                     st.link_button("Event source", event["url"])
+        with st.expander(f"Neighborhood and school context ({len(local_events)}) • low-confidence"):
+            st.caption("Mostly a local traffic/congestion indicator, not a reliable gig surge forecast.")
+            for event in local_events:
+                st.write(f"**{event['name']}** · {event['venue']} · " +
+                         ("Time unconfirmed" if event["all_day"] else clock(event["start"])))
+                if event["url"]:
+                    st.link_button("Calendar source", event["url"])
         with st.expander("Event source coverage"):
             st.dataframe(events_data["coverage"], hide_index=True, use_container_width=True)
             st.caption(f"Checked {events_data['checked'].strftime('%b %d %I:%M %p %Z')}. Empty or blocked calendars never mean no traffic. Open each official source from its URL if coverage is incomplete.")
         st.subheader("Position & Routing Roadmap")
-        st.caption(selected_date.strftime("%A, %B %d, %Y"))
+        st.caption(selected_date.strftime("%A, %B %d, %Y") +
+                   " • Earliest windows first. Event cues are optional, not scheduled shifts.")
+        include_events = st.checkbox("Include major-event cues in roadmap", value=True,
+                                     help="Advisory only. No event guarantees a surge or profitable trip.")
+        include_local = st.checkbox("Also show school and neighborhood cues", value=False,
+                                    disabled=not include_events,
+                                    help="These signals mainly indicate localized congestion, not strong gig demand.")
         render_weather(weather)
-        for slot in generate_schedule(events, base, selected_date.weekday()):
+        for slot in generate_schedule(events, base, selected_date.weekday(),
+                                      include_event_cues=include_events, include_local=include_local):
             with st.expander(f"{slot['time']} · {slot['app']}", expanded=True):
                 st.write(slot["action"])
     with tab2:
