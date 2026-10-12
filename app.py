@@ -594,10 +594,10 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
         timeline.extend([
             {"time": "6:00 PM – 8:30 PM", "app": "Delivery",
              "action": "Thursday dinner: consider compact Carpenter / Washtenaw restaurant loops; target $2.50 per mile.",
-             "_minute": 18 * 60},
+             "_minute": 18 * 60, "_end_minute": 20 * 60 + 30},
             {"time": "8:30 PM onward", "app": "XL / Comfort",
              "action": "Check actual app demand around South U / Packard before repositioning.",
-             "_minute": 20 * 60 + 30},
+             "_minute": 20 * 60 + 30, "_end_minute": 24 * 60},
         ])
     else:
         is_sunday = day_of_week == 6
@@ -606,12 +606,13 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
             "app": "Delivery",
             "action": f"Start from {base_camp}. Favor short Carpenter / Washtenaw loops and account for unpaid return miles.",
             "_minute": 16 * 60 + 30 if is_sunday else 17 * 60,
+            "_end_minute": 21 * 60 + 30 if is_sunday else 20 * 60,
         })
         if day_of_week in (4, 5):
             timeline.append({
                 "time": "8:00 PM onward", "app": "XL / Comfort",
                 "action": "Check downtown demand and legal pickup locations before moving; premiums are not guaranteed.",
-                "_minute": 20 * 60,
+                "_minute": 20 * 60, "_end_minute": 24 * 60,
             })
 
     for event in events:
@@ -622,6 +623,7 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
         if event["all_day"]:
             label = "Kickoff TBD • timing unconfirmed" if event_time_label(event) == "Kickoff TBD" else "Time TBD • timing unconfirmed"
             sort_at = None
+            end_at = None
         else:
             lead = timedelta(hours=3 if event["tier"] == "CRITICAL IMPACT" else 1)
             slot_start = start - lead
@@ -629,6 +631,7 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
             sort_at = slot_start.hour * 60 + slot_start.minute
             if slot_start.date() < start.date():
                 sort_at -= 24 * 60
+            end_at = sort_at + int(lead.total_seconds() / 60)
         signal = event_impact(event)
         action = (f"{event['name']} • {event['venue']}. "
                   f"Traffic: {signal['traffic']} "
@@ -640,11 +643,15 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
             action += " Departure time unconfirmed; do not assume a fixed exit window."
         tag = ("NEIGHBORHOOD / SCHOOL · traffic advisory" if local
                else f"{event['tier']} · demand + traffic advisory")
-        timeline.append({"time": label, "app": tag, "action": action, "_minute": sort_at})
+        timeline.append({"time": label, "app": tag, "action": action,
+                         "_minute": sort_at, "_end_minute": end_at})
     timeline.sort(key=lambda item: (item["_minute"] is None,
                                    item["_minute"] if item["_minute"] is not None else 10**9,
                                    item["app"]))
-    return [{key: value for key, value in item.items() if key != "_minute"} for item in timeline]
+    return [{**{key: value for key, value in item.items()
+                if key not in ("_minute", "_end_minute")},
+             "start_minute": item["_minute"], "end_minute": item["_end_minute"]}
+            for item in timeline]
 
 
 def render_weather(weather):
