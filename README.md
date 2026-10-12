@@ -1,6 +1,6 @@
 # Washtenaw Gig Pilot Pro
 
-Mobile-first Streamlit driver dashboard for Favour (Ogbuefi), operating a 16 MPG Kia Telluride in the Ann Arbor / Ypsilanti corridor. Application logic stays in `app.py`.
+Midnight Pilot is a mobile-first Streamlit driver command center for Ogbuefi, operating a 16 MPG Kia Telluride in the Ann Arbor / Ypsilanti corridor. Application logic stays in `app.py`.
 
 ## Run
 
@@ -10,6 +10,14 @@ Python 3.10+:
 pip install -r requirements.txt
 streamlit run app.py
 ```
+
+## Midnight Pilot design
+
+- **Theme:** dark navy/charcoal native Streamlit theme in `.streamlit/config.toml`, readable slate cards, soft blue highlights, strong keyboard focus indicators and reduced-motion support. The CSS is in `app.py` so the deployment requires no additional UI package.
+- **Greeting:** uses the Eastern local hour to display “Good morning, Ogbuefi”, “Good afternoon, Ogbuefi” or “Good evening, Ogbuefi”. The dashboard no longer uses another form of address.
+- **First screen:** date selector and refresh button, followed by compact **checked gas**, **published events**, and **NWS hazard-trigger** cards. Unknown fuel/forecast states remain unknown—no prices or false clear-weather claims.
+- **Roadmap first:** tap-friendly chronological timeline cards; detailed routing guidance sits under “Routing details” instead of expanding everything on launch. Major-event and school-traffic filters remain available in a single collapsed panel. School avoidance is still enabled by default.
+- **Less clutter:** event lists and source diagnostics live in optional expanders below the roadmap. GasBuddy links and the manual fuel entry live in **Fuel quick check**. Profit grader remains in its own tab, with the same 16 MPG calculations.
 
 ## Live systems and actual coverage
 
@@ -50,4 +58,4 @@ pip install pytest
 python -m pytest -q
 ```
 
-Tests cover manual-price-to-grader behavior, GasBuddy links, NWS date boundaries/cold conversion, Michigan/EMU schedules including TBD-to-confirmed kickoff time changes, best-effort Marquee Arts/Pioneer athletics/AAPS calendar readers, canceled and recurring calendars, chronological roadmaps with early starts, traffic-avoidance defaults and opt-outs, profit math and offline Streamlit rendering.
+Tests cover time-aware Ogbuefi greetings, Midnight Pilot CSS markers and compact timeline headings alongside gas-price and profit math, NWS and events, officially confirmed kickoff updates, chronological roadmaps and offline Streamlit rendering.

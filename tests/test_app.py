@@ -216,3 +216,29 @@ def test_official_schedule_clock_explicit_not_midnight_guessed():
     noon, is_tbd = app.resolve_published_start("2026-10-17", "Noon")
     assert not is_tbd and noon.hour == 12
 
+
+
+def test_midnight_pilot_greeting_uses_ogbuefi_only():
+    assert app.greeting_for_hour(7) == "Good morning, Ogbuefi"
+    assert app.greeting_for_hour(12) == "Good afternoon, Ogbuefi"
+    assert app.greeting_for_hour(19) == "Good evening, Ogbuefi"
+    import pytest
+    with pytest.raises(ValueError):
+        app.greeting_for_hour(24)
+
+
+def test_compact_roadmap_headlines_preserve_details():
+    football = app.event_record("Michigan Football vs Penn State", "Michigan Stadium",
+                                "2026-10-15T15:30:00-04:00", None, "Michigan Athletics")
+    lineup = app.generate_schedule([football], app.BASE, 3)
+    assert app.roadmap_title(lineup[0]) == "Michigan Football vs Penn State"
+    assert app.roadmap_title(lineup[1]) == "Delivery window"
+    assert "Traffic:" in lineup[0]["action"]
+    assert lineup[0]["time"] == "12:30 PM – 3:30 PM"
+
+
+def test_dark_theme_css_and_mobile_ux_markers():
+    assert "pilot-greeting" in app.MIDNIGHT_CSS
+    assert "#111B2A" in app.MIDNIGHT_CSS
+    assert "@media(max-width:600px)" in app.MIDNIGHT_CSS
+    assert ":focus-visible" in app.MIDNIGHT_CSS
