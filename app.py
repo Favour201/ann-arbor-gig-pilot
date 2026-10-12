@@ -870,7 +870,7 @@ def main():
     with tab1:
         st.subheader("Position & Routing Roadmap")
         st.caption(selected_date.strftime("%A, %B %d, %Y") +
-                   " · Earliest windows first · Event cues are advisory")
+                   " · Chronological windows · Filters are optional")
         render_weather(weather)
         with st.expander("⚙️ Roadmap filters", expanded=False):
             include_events = st.checkbox("Include major-event demand + traffic cues", value=True,
@@ -880,7 +880,29 @@ def main():
 
         schedule = generate_schedule(events, base, selected_date.weekday(),
                                      include_event_cues=include_events, include_local=include_local)
-        for slot in schedule:
+        upcoming = next_planning_window(schedule, selected_date, now)
+        with st.container(border=True):
+            st.caption("CURRENT / NEXT LISTED WINDOW" if selected_date == now.date()
+                       else "FIRST PLANNING WINDOW" if selected_date > now.date()
+                       else "HISTORICAL DATE")
+            if upcoming:
+                st.markdown(f"**{roadmap_title(upcoming)}** · {upcoming['time']}")
+                st.caption("Potential planning window, not an obligation to drive.")
+            else:
+                st.caption("No remaining timed windows on this date; any TBD events are listed below."
+                           if selected_date >= now.date() else
+                           "Choose today or a future date for an upcoming window.")
+
+        st.segmented_control("Roadmap focus", ROADMAP_VIEWS,
+                             default="All", key="roadmap_view",
+                             help="View regular driving windows, traffic/event cues, or both.")
+        remaining_only = st.toggle("Show remaining windows only", value=False,
+                                   help="On today's date, hide windows that have already ended. TBD events remain unassigned.")
+        displayed_schedule = filter_roadmap(
+            schedule, st.session_state["roadmap_view"],
+            selected_date=selected_date, now=now, remaining=remaining_only)
+        st.caption(f"{len(displayed_schedule)} windows shown · Chronological order preserved")
+        for slot in displayed_schedule:
             with st.container(border=True):
                 left, right = st.columns([1.15, 2.7], gap="small", vertical_alignment="top")
                 with left:
@@ -891,8 +913,8 @@ def main():
                     st.caption(slot["app"])
                 with st.expander("Routing details", expanded=False):
                     st.write(slot["action"])
-        if not schedule:
-            st.info("No available roadmap windows for these filters.")
+        if not displayed_schedule:
+            st.info("No planning windows match this view or date. Try All or turn off Remaining only.")
 
         st.subheader("Regional event footprint")
         st.caption("Published schedules identify possible crowds and congestion, not guaranteed surge.")
