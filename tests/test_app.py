@@ -106,7 +106,7 @@ def test_offline_ui_and_grader():
         at = AppTest.from_string('from app import main\nmain()', default_timeout=20).run()
         assert not at.exception
         assert next(b for b in at.button if b.label == 'Grade my week').disabled
-        at.checkbox[0].check().run()
+        next(c for c in at.checkbox if "verified pump price" in c.label).check().run()
         next(b for b in at.button if b.label == 'Grade my week').click().run()
         assert not at.exception
         assert any('After-fuel earnings' in x.value for x in at.success)
