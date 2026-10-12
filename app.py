@@ -581,7 +581,7 @@ def window(start, end):
 def event_time_label(event):
     """No fake kickoff time for unannounced games."""
     if event["all_day"]:
-        if "football" in event["name"].lower() and "michigan stadium" in event["venue"].lower():
+        if any(x in event["name"].lower() for x in ("football", "kickoff")) and "michigan stadium" in event["venue"].lower():
             return "Kickoff TBD"
         return "Time TBD / all day"
     return clock(event["start"])
