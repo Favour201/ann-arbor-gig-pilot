@@ -1008,9 +1008,18 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
         st.info("No windows match. Turn off Hide finished windows to view the full plan.")
 
     render_calendar_export(drive_plan, selected_date)
-    if st.session_state.get("driver_authenticated"):
-        brief = pilot.daily_history_brief(load_private_history(), selected_date)
-        st.caption("Your driving history: " + brief["message"])
+    history_rows = load_private_history() if st.session_state.get("driver_authenticated") else []
+    daily_brief = pilot.daily_decision_brief(selected_date, events_data, weather, history_rows)
+    with st.expander("Your daily decision brief", expanded=False):
+        st.write("**Events & congestion:** " + daily_brief["events"])
+        st.write("**Forecast:** " + daily_brief["weather"])
+        if st.session_state.get("driver_authenticated"):
+            st.write("**Your results:** " + daily_brief["history"]["message"])
+        else:
+            st.caption("Personalized benchmarks unlock after logging shifts and "
+                       "accessing your private history in Earnings & Fuel.")
+        st.caption("These are planning clues. Check live driving-app offers and "
+                   "traffic before accepting work.")
 
     critical = [ev for ev in major if ev["tier"] == "CRITICAL IMPACT"]
     if critical:
