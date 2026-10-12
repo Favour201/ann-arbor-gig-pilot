@@ -587,10 +587,74 @@ def event_time_label(event):
     return clock(event["start"])
 
 
-def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True, include_local=True):
+def is_confirmed_michigan_home_game(event):
+    """A published local football kickoff; never use inferred midnight for TBDs."""
+    return (not event["all_day"] and event["tier"] == "CRITICAL IMPACT"
+            and "michigan football" in event["name"].lower()
+            and "michigan stadium" in event["venue"].lower())
+
+
+def game_day_blocks(event, base_camp, *, stop_buffer_minutes=45, return_after_hours=2.0):
+    """Advisory split shift, not a claim of surge or actual ride availability.
+
+    Defaults for 3:30 PM: 12:30–2:45 drive, 2:45–5:30 rest, 5:30 onward return.
+    """
+    if not is_confirmed_michigan_home_game(event):
+        raise ValueError("A confirmed Michigan home football kickoff is required")
+    if stop_buffer_minutes not in (30, 45, 60) or not 1 <= return_after_hours <= 4:
+        raise ValueError("Unsupported game-day planning preferences")
+    kickoff = event["start"]
+    pre_start = kickoff - timedelta(hours=3)
+    pre_end = kickoff - timedelta(minutes=stop_buffer_minutes)
+    return_at = max(kickoff + timedelta(hours=return_after_hours),
+                    local_dt(datetime.combine(kickoff.date(), time(15))))
+    midnight = local_dt(datetime.combine(kickoff.date() + timedelta(days=1), time.min))
+    return_end = min(return_at + timedelta(hours=3), midnight)
+    if pre_end <= pre_start:
+        raise ValueError("Pregame window must be positive")
+    def minute(dt):
+        return ((dt.date() - kickoff.date()).days * 1440
+                + dt.hour * 60 + dt.minute)
+    signal = event_impact(event)
+    blocks = [
+        {"time": window(pre_start, pre_end), "app": "Delivery",
+         "title": "Recommended pregame drive",
+         "action": f"Suggested start from {base_camp}: drive roughly three hours before the "
+                   f"{clock(kickoff)} Michigan kickoff. Finish around {clock(pre_end)} "
+                   "and avoid stadium approaches as arrivals peak. "
+                   f"Traffic: {signal['traffic']} "
+                   "Use actual delivery/rideshare offers to decide whether to drive.",
+         "_minute": minute(pre_start), "_end_minute": minute(pre_end)},
+        {"time": window(pre_end, return_at), "app": "Break / Reset",
+         "title": "Head home & recharge",
+         "action": f"Suggested break: return toward {base_camp}, eat or rest, and "
+                   "avoid stadium congestion. Check live conditions before going back out.",
+         "_minute": minute(pre_end), "_end_minute": minute(return_at)},
+    ]
+    if return_at < midnight:
+        blocks.append(
+            {"time": f"{clock(return_at)} onward", "app": "XL / Comfort",
+             "title": "Recommended return shift",
+             "action": f"Consider restarting around {clock(return_at)} for dinner delivery and "
+                       "potential rideshare requests. Monitor game progress, traffic, "
+                       "actual trip offers and legal pickup areas. "
+                       "Continue only while trips remain worthwhile; no surge is guaranteed.",
+             "_minute": minute(return_at), "_end_minute": minute(return_end)})
+    return blocks
+
+
+def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True, include_local=True,
+                      smart_game_day=True, stop_buffer_minutes=45, return_after_hours=2.0):
     """Chronological driving windows, with local traffic context on by default."""
     timeline = []
-    if day_of_week == 3:
+    featured_game = next((event for event in events
+                          if day_of_week in (5, 6) and is_confirmed_michigan_home_game(event)),
+                         None) if smart_game_day else None
+    if featured_game is not None:
+        timeline.extend(game_day_blocks(featured_game, base_camp,
+                                        stop_buffer_minutes=stop_buffer_minutes,
+                                        return_after_hours=return_after_hours))
+    elif day_of_week == 3:
         timeline.extend([
             {"time": "6:00 PM – 8:30 PM", "app": "Delivery",
              "action": "Thursday dinner: consider compact Carpenter / Washtenaw restaurant loops; target $2.50 per mile.",
@@ -616,6 +680,8 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
             })
 
     for event in events:
+        if event is featured_game:
+            continue  # Game already creates a pregame/return plan; don't duplicate its window.
         local = event["tier"] == "NEIGHBORHOOD / SCHOOL"
         if local and not include_local or not local and not include_event_cues:
             continue
