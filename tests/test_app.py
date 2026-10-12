@@ -308,7 +308,8 @@ def test_saturday_game_recommends_split_shift_and_rest():
     assert [s["app"] for s in slots[:3]] == [
         "Pregame drive", "Rest / reset", "Evening return"]
     assert not any(s["time"] == "5:00 PM – 8:00 PM" for s in slots)
-    assert all("guarantee" not in s["action"].lower() for s in slots)
+    assert "do not chase surge" in slots[0]["action"].lower()
+    assert "only if" in slots[2]["action"].lower()
     assert "stadium" in slots[0]["action"].lower()
     assert "NOT assumed" in slots[2]["action"]
     assert app.next_planning_window(slots, date(2026, 10, 17),
