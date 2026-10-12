@@ -11,6 +11,70 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Calendar exports (current planning date)
+
+On Drive, expand **Add planned shifts to calendar**, explicitly select the
+actual driving windows, and open a prefilled Google Calendar event link for each
+or download a single .ics calendar file (Apple Calendar and Outlook). The link
+only prepares an event, not a write to your calendar; save each event yourself.
+Events use the schedule after any game-day timing adjustments and handle
+America/New_York daylight saving time correctly. Unknown/TBD kickoff times
+are never invented.
+
+Open-ended "onward" shifts use your *explicitly chosen* 1–5-hour calendar
+duration, not a published end time. Rest breaks may optionally be included.
+This is manual export, not live sync. Changes to kickoff times do not update
+already-saved calendar events; revise them yourself when necessary.
+
+## Private shift history: Google Sheets setup
+
+Shift history is designed for a private Google Sheet and is disabled until you
+configure a strong driver passphrase. Your deployed app URL is public. A basic
+passphrase gate is not equivalent to private hosting or identity-based login.
+Use a unique 12+ character passphrase, and preferably restrict app access before
+storing information you consider sensitive. No credentials are in this repository.
+
+One-time setup:
+
+1. Create a private Google Sheet and copy its spreadsheet ID from the URL.
+2. In Google Cloud Console enable the Google Sheets and Drive APIs, create a
+   service account and download its JSON key. Share ONLY the private spreadsheet
+   with that service account's client_email as Editor; never make it public.
+3. In Streamlit Community Cloud, open this app's settings and Secrets. Define
+   these top-level TOML keys: DRIVER_ACCESS_PASSWORD (your long private passphrase)
+   and SHIFT_SHEET_ID (the private spreadsheet ID).
+4. Put all fields from the service account's JSON credential into a TOML section
+   named [gcp_service_account]. Include type, project_id, private_key_id,
+   private_key, client_email, client_id, auth_uri, token_uri,
+   auth_provider_x509_cert_url and client_x509_cert_url. Quote the private_key
+   with newline escapes (\\n). Alternatively, set GCP_SERVICE_ACCOUNT_JSON to
+   a correctly escaped JSON string at the root of Streamlit Secrets.
+5. Do not commit secrets.toml or a credentials JSON file to GitHub. The app
+   creates a Shifts tab with fixed headers upon first authenticated use. Save
+   a completed shift to test your access.
+
+Under Earnings & Fuel → Shift history & insights, unlock the owner gate and
+record actual gross pay, total online hours (including idle time), **all miles**
+(including unpaid mileage), checked regular gas price, platform, area and shift
+window. Optionally enter other variable vehicle costs per mile. The app
+calculates **after fuel** and an explicitly estimated amount after extra costs.
+Neither is full profit after taxes, insurance, wear and depreciation.
+
+The private Sheet is persistent once configured and reachable. If storage is
+unavailable, a record is held temporarily in the Streamlit session ONLY, with
+a warning to download a CSV backup. CSV backups can be restored into the
+current session; explicit Sync adds missing records to the private Sheet.
+Never rely on session-only records across app restarts.
+
+## Daily decision brief
+
+Drive → Your daily decision brief combines real published event counts,
+forecast cautions and the owner's actual recorded weekday shifts, only if
+history is unlocked. It gives a historical **median after-fuel earnings per
+online hour** only with at least 3 matching weekday shifts recorded within
+90 days. This is a descriptive baseline, not a live-demand prediction.
+Unknown feed coverage and insufficient history are labeled explicitly.
+
 ## Smart Michigan game-day split shifts
 
 For a **confirmed Michigan Stadium football kickoff on Saturday or Sunday**, the roadmap automatically recommends a practical **pregame drive → home rest → return** pattern instead of showing only one broad pregame crowd window. By default, a **3:30 PM** kickoff suggests driving **12:30–2:45 PM**, taking a break **2:45–5:30 PM**, and returning **5:30 PM onward** (subject to real demand, traffic, road closures and personal preference). Use the existing *Roadmap filters & game-day preferences* expander to change the stop buffer to **30 / 45 / 60 minutes**, or the return delay to **1–4 hours after kickoff**. For noon kickoffs, the return block will not begin before 3 PM.
