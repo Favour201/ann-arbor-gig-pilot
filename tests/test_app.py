@@ -1,44 +1,10 @@
 import json
 from datetime import date, datetime, timedelta
 from unittest.mock import patch
-import pytest
 import app
 
 NOW = datetime(2026, 10, 12, 10, tzinfo=app.TZ)
 
-
-def quote(sid='bp_washtenaw', **kw):
-    return dict(station_id=sid, regular=3.5, observed_at=NOW.isoformat(), **kw)
-
-
-def test_fuel_freshness_currency_and_latest():
-    rows = [quote(), dict(quote(), regular=2, observed_at=(NOW-timedelta(days=2)).isoformat()),
-            dict(quote('costco_airport'), currency='CAD'),
-            dict(quote('bp_east'), observed_at='2026-10-12T10:00:00'),
-            dict(quote('marathon_washtenaw'), regular=float('nan'))]
-    data = app.parse_fuel_feed({'prices': rows}, NOW)
-    assert list(data) == ['bp_washtenaw']
-    assert data['bp_washtenaw']['price'] == 3.5
-
-
-def test_fuel_expansion_and_radius():
-    near = quote('new', name='New', address='Nearby', latitude=42.256, longitude=-83.68)
-    far = quote('far', name='Far', address='Detroit', latitude=42.33, longitude=-83.05)
-    data = app.parse_fuel_feed({'prices': [near, far]}, NOW, radius=5)
-    assert list(data) == ['new']
-    assert data['new']['name'] == 'New'
-
-
-def test_public_price_never_uses_average():
-    html = '<div class="gaspriceboxdetailp"><div class="oilpriceaveragehd">Regular</div><div class="stationprice">N/A</div></div><h4>Regular Gas</h4><div>$2.00</div>'
-    assert app.parse_public_fuel(html) is None
-    assert app.parse_public_fuel(html.replace('N/A', '$3.499')) == 3.499
-
-
-def test_minimum_filters_expired_cache_entry():
-    fresh = dict(id='bp', price=3.5, observed_at=NOW)
-    old = dict(id='costco', price=2, observed_at=NOW-timedelta(hours=25))
-    assert app.current_quotes({'stations': [old, fresh]}, NOW) == [fresh]
 
 
 def test_weather_overnight_and_horizon():
@@ -99,40 +65,20 @@ def test_profit():
 
 def test_offline_ui_and_grader():
     from streamlit.testing.v1 import AppTest
-    fuel = {'stations': [], 'notes': [], 'checked': NOW}
     events = {'events': [], 'notes': ['Additional feeds not connected'], 'coverage': [], 'checked': NOW}
     weather = {'places': [{'place':'Ann Arbor', 'status':'NWS unavailable', 'periods':[], 'hazards':[], 'url':''}], 'hazards':[], 'checked':NOW}
-    with patch.object(app, 'fetch_live_fuel', return_value=fuel), patch.object(app, 'fetch_live_events', return_value=events), patch.object(app, 'fetch_weather', return_value=weather):
+    with patch.object(app, 'fetch_live_events', return_value=events), patch.object(app, 'fetch_weather', return_value=weather):
         at = AppTest.from_string('from app import main\nmain()', default_timeout=20).run()
         assert not at.exception
         assert next(b for b in at.button if b.label == 'Grade my week').disabled
-        next(c for c in at.checkbox if "verified pump price" in c.label).check().run()
+        next(n for n in at.number_input if n.label == "Gas price you checked ($/gal)").set_value(3.79).run()
+        assert not next(b for b in at.button if b.label == 'Grade my week').disabled
         next(b for b in at.button if b.label == 'Grade my week').click().run()
         assert not at.exception
         assert any('After-fuel earnings' in x.value for x in at.success)
 
-
-def test_driver_fuel_history_and_expiry():
-    now = NOW
-    fresh = {"station_id": "costco_airport", "regular": 3.25, "observed_at": now.isoformat(), "paid": True}
-    stale = {"station_id": "bp_washtenaw", "regular": 2.50, "observed_at": (now-timedelta(days=2)).isoformat()}
-    invalid = {"station_id": "costco_airport", "regular": float("nan"), "observed_at": now.isoformat()}
-    history = app.validated_driver_history([fresh, stale, invalid], now)
-    assert len(history) == 2
-    fuel = {"stations": [{**s, "price": None, "observed_at": None, "source": "Station reference"}
-                         for s in app.STATIONS], "notes": [], "checked": now}
-    merged = app.merge_driver_reports(fuel, history, now)
-    current = app.current_quotes(merged, now)
-    assert len(current) == 1
-    assert current[0]["id"] == "costco_airport"
-    assert current[0]["price"] == 3.25
-
-
-def test_detour_net_savings_and_no_false_profit():
-    result = app.fuel_detour_value(3.50, 3.30, 15, 8)
-    assert result["pump_savings"] == 3.00
-    assert result["detour_fuel_cost"] == 1.65
-    assert result["net_savings"] == 1.35
-    assert app.fuel_detour_value(3.00, 3.30, 15, 8)["net_savings"] < 0
-    with pytest.raises(ValueError):
-        app.fuel_detour_value(3.5, 3.3, 15, -1)
+def test_gasbuddy_links_and_explicit_manual_price():
+    assert "gasbuddy.com/home?search=Ann%20Arbor" in app.GASBUDDY_ANN_ARBOR_URL
+    assert "gasbuddy.com/home?search=Ypsilanti" in app.GASBUDDY_YPSILANTI_URL
+    assert app.calculate_metrics(100, 4, 160, 3.79)["fuel_cost"] == 37.9
+    assert app.calculate_metrics(100, 4, 160, None) is None
