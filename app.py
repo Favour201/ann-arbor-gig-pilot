@@ -587,10 +587,67 @@ def event_time_label(event):
     return clock(event["start"])
 
 
-def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True, include_local=True):
+
+def is_confirmed_michigan_home_football(event):
+    """Never use untimed, away or non-football events to create a timed driving plan."""
+    return (event["tier"] == "CRITICAL IMPACT" and not event["all_day"]
+            and "michigan stadium" in event["venue"].lower()
+            and "michigan" in event["name"].lower()
+            and "football" in event["name"].lower())
+
+
+def saturday_game_driving_plan(event, base_camp, pregame_buffer_minutes=60):
+    """Suggested split shift relative to an officially announced Saturday kickoff.
+
+    It is deliberately advisory, not a surge prediction. The driver may finish
+    60 or 30 minutes before kickoff, take a break, and assess another shift
+    two hours after kickoff without assuming the game has ended.
+    """
+    if not is_confirmed_michigan_home_football(event) or event["start"].weekday() != 5:
+        raise ValueError("A confirmed Saturday Michigan home football kickoff is required")
+    if pregame_buffer_minutes not in (30, 60):
+        raise ValueError("Pregame buffer must be 30 or 60 minutes")
+    kickoff = event["start"]
+    drive_start = kickoff - timedelta(hours=3)
+    pregame_end = kickoff - timedelta(minutes=pregame_buffer_minutes)
+    return_at = kickoff + timedelta(hours=2)
+    return_end = return_at + timedelta(hours=3)
+    opponent = event["name"]
+    return [
+        {"time": window(drive_start, pregame_end),
+         "app": "Pregame drive",
+         "action": (f"Suggested shift for {opponent}: start near {base_camp}, assess actual "
+                    "Uber/Lyft and delivery demand, and use legal pickup points away "
+                    "from stadium road restrictions. Wrap up before kickoff; do not "
+                    "chase surge or accept weak-paying trips."),
+         "_minute": drive_start.hour * 60 + drive_start.minute - (1440 if drive_start.date() < kickoff.date() else 0),
+         "_end_minute": pregame_end.hour * 60 + pregame_end.minute},
+        {"time": window(pregame_end, return_at),
+         "app": "Rest / reset",
+         "action": ("Optional home break, food and vehicle reset. Leave enough time to "
+                    "get home safely through game traffic. This is personal planning, "
+                    "not an event or a guarantee that demand will be stronger later."),
+         "_minute": pregame_end.hour * 60 + pregame_end.minute,
+         "_end_minute": return_at.hour * 60 + return_at.minute + (1440 if return_at.date() > kickoff.date() else 0)},
+        {"time": window(return_at, return_end),
+         "app": "Evening return",
+         "action": (f"Optional second shift: leave {base_camp} only if current delivery "
+                    "or rideshare requests justify the mileage. Stadium traffic can "
+                    "remain heavy, and postgame departures are NOT assumed to begin "
+                    "at this time. Check traffic and actual fares before heading downtown."),
+         "_minute": return_at.hour * 60 + return_at.minute + (1440 if return_at.date() > kickoff.date() else 0),
+         "_end_minute": return_end.hour * 60 + return_end.minute + (1440 if return_end.date() > kickoff.date() else 0)},
+    ]
+
+
+def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True, include_local=True, pregame_buffer_minutes=60):
     """Chronological driving windows, with local traffic context on by default."""
     timeline = []
-    if day_of_week == 3:
+    michigan_game = next((event for event in events if is_confirmed_michigan_home_football(event)
+                          and event["start"].weekday() == 5), None) if day_of_week == 5 and include_event_cues else None
+    if michigan_game:
+        timeline.extend(saturday_game_driving_plan(michigan_game, base_camp, pregame_buffer_minutes))
+    elif day_of_week == 3:
         timeline.extend([
             {"time": "6:00 PM – 8:30 PM", "app": "Delivery",
              "action": "Thursday dinner: consider compact Carpenter / Washtenaw restaurant loops; target $2.50 per mile.",
@@ -616,6 +673,8 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
             })
 
     for event in events:
+        if event is michigan_game:
+            continue  # The game-day shift already includes stadium and traffic guidance.
         local = event["tier"] == "NEIGHBORHOOD / SCHOOL"
         if local and not include_local or not local and not include_event_cues:
             continue
