@@ -283,6 +283,8 @@ def parse_marquee_events(html, day, source):
         if not match:
             continue
         recognized += 1
+        if not match.group("year"):
+            continue  # Date-only future listings are ambiguous: never assume the selected year.
         if re.search(r"\b(cancelled|canceled|postponed)\b", context, re.I):
             continue
         try:
