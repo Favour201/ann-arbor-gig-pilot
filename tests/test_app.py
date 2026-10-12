@@ -65,17 +65,73 @@ def test_profit():
 
 def test_offline_ui_and_grader():
     from streamlit.testing.v1 import AppTest
-    events = {'events': [], 'notes': ['Additional feeds not connected'], 'coverage': [], 'checked': NOW}
-    weather = {'places': [{'place':'Ann Arbor', 'status':'NWS unavailable', 'periods':[], 'hazards':[], 'url':''}], 'hazards':[], 'checked':NOW}
-    with patch.object(app, 'fetch_live_events', return_value=events), patch.object(app, 'fetch_weather', return_value=weather):
-        at = AppTest.from_string('from app import main\nmain()', default_timeout=20).run()
+    events = {'events': [], 'notes': [], 'coverage': [], 'checked': NOW}
+    weather = {'places': [{'place': 'Ann Arbor', 'status': 'NWS unavailable',
+                          'periods': [], 'hazards': [], 'url': ''}],
+               'hazards': [], 'checked': NOW}
+    with patch.object(app, 'fetch_live_events', return_value=events), \
+         patch.object(app, 'fetch_weather', return_value=weather):
+        at = AppTest.from_string('from app import main\nmain()', default_timeout=25).run()
         assert not at.exception
-        assert next(b for b in at.button if b.label == 'Grade my week').disabled
+        assert at.session_state["pilot_workspace"] == "Drive"
+        assert not at.number_input
+        assert not any("Grade my week" == b.label for b in at.button)
+        assert not at.dataframe  # Source coverage is not part of Drive.
+        at.segmented_control[0].set_value("Earnings & Fuel").run()
+        assert not at.exception
+        assert next(b for b in at.button if b.label == "Grade my week").disabled
         next(n for n in at.number_input if n.label == "Gas price you checked ($/gal)").set_value(3.79).run()
-        assert not next(b for b in at.button if b.label == 'Grade my week').disabled
-        next(b for b in at.button if b.label == 'Grade my week').click().run()
+        assert not next(b for b in at.button if b.label == "Grade my week").disabled
+        next(b for b in at.button if b.label == "Grade my week").click().run()
         assert not at.exception
-        assert any('After-fuel earnings' in x.value for x in at.success)
+        assert any("After-fuel earnings" in x.value for x in at.success)
+
+
+def test_workspace_navigation_hides_unneeded_content_and_preserves_date():
+    from streamlit.testing.v1 import AppTest
+    events = {'events': [], 'notes': [], 'coverage': [
+        {'Source': 'Theater', 'Status': 'Not verified', 'URL': 'https://example.org/'}],
+        'checked': NOW}
+    weather = {'places': [{'place': 'Ann Arbor', 'status': 'Available',
+                           'periods': [], 'hazards': [], 'url': ''}],
+               'hazards': [], 'checked': NOW}
+    with patch.object(app, 'fetch_live_events', return_value=events) as event_fetch, \
+         patch.object(app, 'fetch_weather', return_value=weather) as weather_fetch:
+        at = AppTest.from_string('from app import main\nmain()', default_timeout=25).run()
+        assert not at.exception
+        assert at.session_state["pilot_workspace"] == "Drive"
+        assert not at.dataframe
+        assert not at.number_input
+        assert event_fetch.call_count == 1
+        at.segmented_control[0].set_value("Events & Traffic").run()
+        assert not at.exception
+        assert len(at.dataframe) == 1  # Present only in deliberate Advanced diagnostics.
+        at.segmented_control[0].set_value("Earnings & Fuel").run()
+        assert not at.exception
+        before_events, before_weather = event_fetch.call_count, weather_fetch.call_count
+        at.segmented_control[0].set_value("Earnings & Fuel").run()
+        assert event_fetch.call_count == before_events
+        assert weather_fetch.call_count == before_weather
+        assert not at.date_input
+        at.segmented_control[0].set_value("Drive").run()
+        assert not at.exception
+        assert len(at.date_input) == 1
+
+
+def test_separate_workspace_pure_helpers_keep_event_classification():
+    assert app.WORKSPACES == ("Drive", "Events & Traffic", "Earnings & Fuel")
+    school = app.event_record("Pioneer Fall Choir Concert", "Pioneer High School",
+                              "2026-10-17T19:00:00-04:00", None, "Fixture")
+    game = app.event_record("Michigan Football", "Michigan Stadium",
+                            "2026-10-17T15:30:00-04:00", None, "Fixture")
+    major, local = app.partition_events([school, game])
+    assert major == [game]
+    assert local == [school]
+    drive = app.filter_roadmap(app.generate_schedule([game], app.BASE, 5), "Driving")
+    assert [s["time"] for s in drive] == [
+        "12:30 PM – 2:45 PM", "2:45 PM – 5:30 PM", "5:30 PM onward"]
+
+
 
 def test_gasbuddy_links_and_explicit_manual_price():
     assert "gasbuddy.com/home?search=Ann%20Arbor" in app.GASBUDDY_ANN_ARBOR_URL
