@@ -132,3 +132,38 @@ def test_theater_bad_markup_reported_as_unknown():
     with pytest.raises(ValueError):
         app.parse_eventlink_events("<p>unavailable</p>", date(2026, 10, 14), "Pioneer", "")
 
+
+def test_roadmap_chronology_early_events_before_evening_shift():
+    stadium = app.event_record("Michigan Football", "Michigan Stadium",
+                               "2026-10-15T15:30:00-04:00", None, "Fixture")
+    theater = app.event_record("Show", "Michigan Theater",
+                               "2026-10-15T20:00:00-04:00", None, "Fixture")
+    slots = app.generate_schedule([theater, stadium], app.BASE, 3)
+    assert slots[0]["time"] == "12:30 PM – 3:30 PM"
+    assert slots[1]["time"] == "6:00 PM – 8:30 PM"
+    assert slots[2]["time"] == "7:00 PM – 8:00 PM"
+    assert slots[3]["time"] == "8:30 PM onward"
+
+
+def test_school_cues_opt_in_and_not_mandatory():
+    school = app.event_record("Homecoming Game", "Pioneer High School",
+                              "2026-10-15T19:00:00-04:00", None, "School")
+    stadium = app.event_record("Michigan Football", "Michigan Stadium",
+                               "2026-10-15T15:30:00-04:00", None, "U-M")
+    default = app.generate_schedule([school, stadium], app.BASE, 3)
+    assert not any(slot["app"].startswith("NEIGHBORHOOD") for slot in default)
+    assert any(slot["app"].startswith("CRITICAL") for slot in default)
+    opted = app.generate_schedule([school, stadium], app.BASE, 3, include_local=True)
+    assert any(slot["app"].startswith("NEIGHBORHOOD") for slot in opted)
+    pure = app.generate_schedule([school, stadium], app.BASE, 3, include_event_cues=False)
+    assert all(slot["app"] in ("Delivery", "XL / Comfort") for slot in pure)
+
+
+def test_unknown_kickoff_timing_is_separate_and_last():
+    mystery = app.event_record("Unconfirmed kickoff", "Michigan Stadium",
+                               "2026-10-15", None, "Fixture", all_day=True)
+    slots = app.generate_schedule([mystery], app.BASE, 3)
+    assert slots[-1]["time"] == "Time unconfirmed (optional context)"
+    assert "optional" in slots[-1]["app"]
+    assert slots[0]["time"] == "6:00 PM – 8:30 PM"
+
