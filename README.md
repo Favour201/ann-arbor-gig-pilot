@@ -13,49 +13,16 @@ streamlit run app.py
 
 ## Live systems and actual coverage
 
-- **Fuel:** unreliable public station-price scraping is disabled (including the suspect Costco quote). BP at 3031 Washtenaw, Costco at 771 Airport, Sam’s Club at 5450 Carpenter and other corridor stations are maintained for easy manual checks. Enter a checked regular unleaded price in the dashboard; the optional browser-local log stores its timestamp and your paid/observed flag. Driver entries are **unverified**, and both entries and provider prices expire from the active ranking after 24 hours. A connected timestamped fuel provider can still update prices automatically. Without a dated price the profit grader asks for a manual override. Detour comparison subtracts extra fuel burned at 16 MPG (time, depreciation and maintenance excluded). No dependable free, working US station-level API was verified.
+- **Fuel:** one-tap GasBuddy search links for Ann Arbor and Ypsilanti. GasBuddy's own app/site handles nearby station discovery, prices, and location permissions; the dashboard does **not** scrape GasBuddy or claim to know live station prices. Check report age, grade, payment restrictions, and club membership. Enter the regular-gas price you checked into the single dashboard number field. This value is retained during the current Streamlit session only, is never silently invented, and drives the Weekly Profit Grader at 16 MPG.
 - **Events:** official Michigan and EMU athletics schedule parsers filter home games and local venues, retain kickoff minutes and TBD times, and exclude canceled/postponed events. Michigan's public calendar adds campus / Hill Auditorium coverage. Configurable JSON, iCalendar (including recurring events), and JSON-LD adapters support Michigan Theater, neighborhood and high-school sources. Those additional feeds are **not preconnected**. Source failures are visible; no-match results never imply clear traffic. Published athletics seasons limit date coverage.
 - **Weather:** resolves both Ann Arbor and Ypsilanti NWS `/points` grids, retrieves forecasts and intersects forecast periods with the selected Eastern-time calendar date, including overnight periods. Rain, storms, snow/ice or temperature ≤15°F adds an amber **Weather Premium Surge Warning** in the roadmap. That is an app planning label, not an official weather alert or guaranteed rideshare surge. Dates beyond the forecast horizon and outages display an unknown state.
-- **Profit:** uses the lowest current (≤24 hours old) regular quote across the returned stations, including membership stations clearly labeled. Optional actual-paid-price override. Results recalculate when the live price changes. Earnings after fuel exclude tax, wear, insurance and depreciation.
+- **Profit:** uses only the gas price the driver enters. No price means the grader stays disabled. Results recalculate when your input changes. Earnings after fuel exclude tax, wear, insurance and depreciation.
 
-Fuel/weather cache: 15 minutes. Driver price history is scoped to the browser (local storage best effort, otherwise current session) and is not shared across devices. Events: 30 minutes. Requests are bounded and independent sources run concurrently. Refresh happens on rerun/interaction or via **Refresh live sources**, not through a background scheduler.
+Weather cache: 15 minutes. Events: 30 minutes. Requests are bounded and independent sources run concurrently. Refresh happens on rerun/interaction or via **Refresh live sources**, not through a background scheduler. GasBuddy opens externally and is not part of the refresh cache.
 
-## Connect a fuel provider
+## Check local gas prices
 
-Set these environment variables or Streamlit secrets (never commit credentials):
-
-```toml
-FUEL_FEED_URL = "https://your-provider.example/normalized-prices"
-FUEL_FEED_TOKEN = "your-optional-token"
-```
-
-This is a normalized adapter contract, **not** an existing vendor endpoint. A vendor-specific adapter must map its response to this shape. The request sends `latitude=42.256`, `longitude=-83.680` and the selected `radius_miles` (5–30). A fixed-response endpoint also works; additional stations are radius-filtered locally.
-
-```json
-{
-  "prices": [
-    {
-      "station_id": "bp_washtenaw",
-      "regular": 3.49,
-      "observed_at": "2026-10-12T14:00:00-04:00",
-      "currency": "USD",
-      "unit": "gallon"
-    },
-    {
-      "station_id": "provider-station-id",
-      "name": "Another station",
-      "address": "Example address, Ann Arbor",
-      "latitude": 42.26,
-      "longitude": -83.68,
-      "member": false,
-      "regular": 3.59,
-      "observed_at": "2026-10-12T14:00:00-04:00"
-    }
-  ]
-}
-```
-
-Example values are documentation fixtures, not current prices. Priority IDs: `bp_washtenaw`, `sams_carpenter`, `costco_airport`, `bp_east`, `marathon_washtenaw`. Those fixed corridor stops remain in the matrix. Additional stations require coordinates, name and address. Timestamp must include a timezone; old, future, nonfinite, wrong-currency/unit and out-of-radius reports are rejected. The newest quote wins for duplicate station IDs. Prices are USD per US gallon for regular unleaded; do not map regional averages or premium prices into this feed.
+Use the on-page GasBuddy links to search in Ann Arbor or Ypsilanti. GasBuddy may permit a device-location search from its app or website, but the preset links themselves are city-based rather than exact home-address coordinates. The prefilled search parameters are convenience links; if GasBuddy ignores the search, enter a city or ZIP code there. GasBuddy is a third-party community-reported source and may show stale or incorrect prices. **Only the price you type manually** is used for calculations. No external browser-storage plugin or API key is needed.
 
 ## Connect additional event calendars
 
@@ -83,4 +50,4 @@ pip install pytest
 python -m pytest -q
 ```
 
-Tests cover fuel validation and regional expansion, NWS date boundaries/horizon/cold conversion, local home schedules, canceled and recurring calendars, Thursday roadmap retention, profit math and offline Streamlit rendering.
+Tests cover manual-price-to-grader behavior, GasBuddy link construction, NWS date boundaries/cold conversion, home-game schedules, canceled and recurring calendars, Thursday roadmap retention, profit math and offline Streamlit rendering.
