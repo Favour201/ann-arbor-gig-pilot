@@ -238,6 +238,152 @@ def parse_extra(text, fmt, day, name, source):
     return events
 
 
+
+MONTH_NAME = r"(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+DATE_WORD = re.compile(rf"\b(?P<month>{MONTH_NAME})\s+(?P<day>\d{{1,2}})(?:st|nd|rd|th)?(?:,\s*(?P<year>20\d{{2}}))?\s+(?:at|from)\s+(?P<hour>\d{{1,2}})(?::(?P<minute>\d{{2}}))?\s*(?P<meridiem>AM|PM)\b", re.I)
+SCHOOL_DATE = re.compile(rf"^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s*(?P<month>{MONTH_NAME})\s+(?P<day>\d{{1,2}})$", re.I)
+SCHOOL_TIME = re.compile(r"\b(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<meridiem>AM|PM)\s*-\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b", re.I)
+EVENTLINK_DATE = re.compile(rf"\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\s+(?P<month>{MONTH_NAME[:0] if False else r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'})\.?\s+(?P<day>\d{{1,2}})\s+(?P<year>20\d{{2}})\s+(?:(?P<hour>\d{{1,2}}):(?P<minute>\d{{2}})\s*(?P<meridiem>AM|PM)|TBD)\b", re.I)
+SCHOOL_IMPACT_WORDS = ("football", "basketball", "volleyball", "soccer", "concert", "dance", "theatre", "theater", "homecoming", "graduation", "orchestra", "choir", "band", "gymnastics", "hockey", "field hockey", "water polo", "wrestling", "play", "musical", "swimming", "track", "sports", "ceremony", "festival", "competition")
+
+
+def date_from_match(match, chosen_day, month_format):
+    """Parse published local clock time without inventing a year for a different selected date."""
+    values = match.groupdict()
+    year = int(values.get("year") or chosen_day.year)
+    month = datetime.strptime(values["month"].title(), month_format).month
+    hour = int(values["hour"]) % 12 + (12 if values["meridiem"].upper() == "PM" else 0)
+    minute = int(values.get("minute") or 0)
+    return local_dt(datetime(year, month, int(values["day"]), hour, minute))
+
+
+def parse_marquee_events(html, day, source):
+    """Best-effort official theater's published, dated live-event cards; no made-up times."""
+    soup = BeautifulSoup(html, "html.parser")
+    events, recognized = [], 0
+    for head in soup.select("h2, h3, h4"):
+        name = head.get_text(" ", strip=True)
+        if not 3 <= len(name) <= 160 or name.lower() in (
+                "live events", "artistic excellence", "penny stamps speaker series",
+                "michigan theater", "state theatre", "find us"):
+            continue
+        context = ""
+        for parent in (head.parent, head.parent.parent if head.parent else None,
+                       head.parent.parent.parent if head.parent and head.parent.parent else None):
+            if parent is None:
+                continue
+            candidate = parent.get_text(" ", strip=True)
+            if len(name) < len(candidate) < 1300 and DATE_WORD.search(candidate):
+                context = candidate
+                break
+        if not context:
+            continue
+        match = DATE_WORD.search(context)
+        if not match:
+            continue
+        recognized += 1
+        if re.search(r"\b(cancelled|canceled|postponed)\b", context, re.I):
+            continue
+        try:
+            start = date_from_match(match, day, "%B")
+            if start.date() != day:
+                continue
+            href = head.find("a", href=True) or (head.parent.find("a", href=True) if head.parent else None)
+            url = href.get("href", "") if href else source
+            if url.startswith("/"):
+                url = "https://marquee-arts.org" + url
+            events.append(event_record(name, "Michigan Theater, Ann Arbor", start, None, "Marquee Arts", url))
+        except (ValueError, OverflowError):
+            continue
+    if not recognized:
+        raise ValueError("No recognizable dated theater cards")
+    return events
+
+
+def parse_eventlink_events(html, day, school, source):
+    """Read public athletic listing rows; never treat away games outside the corridor as local."""
+    soup = BeautifulSoup(html, "html.parser")
+    if "EVENTS" not in soup.get_text(" ", strip=True).upper():
+        raise ValueError("Athletics listing markup unavailable")
+    events, recognized = [], 0
+    # Visible listing text is often more stable across Eventlink website themes than CSS classes.
+    lines = [v.strip() for v in soup.stripped_strings if v.strip()]
+    for i, line in enumerate(lines):
+        match = EVENTLINK_DATE.search(line)
+        if not match:
+            continue
+        recognized += 1
+        opponent = lines[i - 1] if i > 0 else ""
+        venue = lines[i + 1] if i + 1 < len(lines) else ""
+        sport = "School athletics"
+        for previous in reversed(lines[max(0, i - 9):i]):
+            if re.search(r"\b(Football|Soccer|Basketball|Volleyball|Hockey|Field Hockey|Water Polo|Wrestling|Lacrosse|Swimming|Gymnastics|Track|Softball|Baseball|Tennis)\b", previous, re.I):
+                sport = previous[:75]
+                break
+        if not in_corridor(venue) or re.search(r"\b(cancelled|canceled|postponed)\b", opponent, re.I):
+            continue
+        try:
+            tbd = not match.group("hour")
+            if tbd:
+                start = local_dt(date(int(match.group("year")), datetime.strptime(match.group("month").title(), "%b").month, int(match.group("day"))))
+            else:
+                start = date_from_match(match, day, "%b")
+            if start.date() != day:
+                continue
+            events.append(event_record(f"{school} • {sport} • {opponent}", venue,
+                                       start, None, school + " Athletics", source, all_day=tbd))
+        except ValueError:
+            continue
+    if not recognized:
+        raise ValueError("No recognizable athletics dates")
+    return events
+
+
+def parse_school_calendar(html, day, school, source):
+    """Read the school's rendered calendar, but only the month explicitly visible on the page."""
+    soup = BeautifulSoup(html, "html.parser")
+    lines = [v.strip() for v in soup.stripped_strings if v.strip()]
+    calendar_month = day.strftime("%B %Y")
+    if not any(line == calendar_month for line in lines):
+        raise ValueError("Selected month not visible in school calendar")
+    current_day, events = None, []
+    school_venue = f"{school} High School, Ann Arbor"
+    recognized = False
+    for i, line in enumerate(lines):
+        match = SCHOOL_DATE.fullmatch(line)
+        if match:
+            try:
+                current_day = date(day.year, datetime.strptime(match.group("month").title(), "%B").month, int(match.group("day")))
+                recognized = True
+            except ValueError:
+                current_day = None
+            continue
+        if current_day != day or not any(x in line.lower() for x in SCHOOL_IMPACT_WORDS):
+            continue
+        # The school calendar sometimes lists the source category separately from its event title.
+        if line.lower().strip() in ("huron athletics", "pioneer events", "skyline public calendar"):
+            continue
+        title = line
+        nearby = lines[i + 1:i + 6]
+        time_match = next((SCHOOL_TIME.search(v) for v in nearby if SCHOOL_TIME.search(v)), None)
+        if not time_match:
+            continue  # No usable event time; do not fabricate one.
+        venue = next((v for v in nearby if in_corridor(v)), "")
+        if " @ " in title and not venue:
+            continue  # Away game with no confirmed local venue.
+        if not venue:
+            venue = school_venue
+        try:
+            hour = int(time_match.group("hour")) % 12 + (12 if time_match.group("meridiem").upper() == "PM" else 0)
+            start = local_dt(datetime.combine(day, time(hour, int(time_match.group("minute") or 0))))
+            events.append(event_record(f"{school}: {title}", venue, start, None, school + " Calendar", source))
+        except ValueError:
+            continue
+    if not recognized:
+        raise ValueError("School calendar dates not readable")
+    return events
+
+
 @st.cache_data(ttl=1800, max_entries=32, show_spinner=False)
 def fetch_live_events(day, extra_json="[]"):
     jobs = [("U-M campus / Hill Auditorium", "umich", "https://events.umich.edu/", None)]
@@ -247,6 +393,13 @@ def fetch_live_events(day, extra_json="[]"):
     ]:
         for sport in sports:
             jobs.append((school + " " + sport, "sidearm", f"https://{host}/sports/{sport}/schedule", (school, sport)))
+    jobs.extend([
+        ("Michigan Theater (Marquee Arts)", "marquee", "https://marquee-arts.org/live-events/", None),
+        ("Pioneer Athletics", "eventlink", "https://pioneerathletics.net/Events", "Pioneer"),
+        ("Pioneer School Calendar", "school-calendar", "https://pioneer.a2schools.org/calendar", "Pioneer"),
+        ("Huron School Calendar", "school-calendar", "https://huron.a2schools.org/hurondistrict-calendar", "Huron"),
+        ("Skyline School Calendar", "school-calendar", "https://skyline.a2schools.org/calendar", "Skyline"),
+    ])
     notes = []
     try:
         extra = json.loads(extra_json)
@@ -258,8 +411,6 @@ def fetch_live_events(day, extra_json="[]"):
             jobs.append((feed["name"], feed["format"], feed["url"], None))
     except (ValueError, TypeError):
         notes.append("Additional calendar settings are invalid.")
-    if len(jobs) == 13:
-        notes.append("Michigan Theater and neighborhood/high-school feeds are not connected. Add their JSON or iCalendar feeds in EVENT_FEEDS_JSON.")
 
     def run(job):
         name, fmt, url, detail = job
@@ -268,11 +419,17 @@ def fetch_live_events(day, extra_json="[]"):
                 events = fetch_umich(day)
             elif fmt == "sidearm":
                 events = parse_sidearm(get(url).text, day, *detail, url)
+            elif fmt == "marquee":
+                events = parse_marquee_events(get(url).text, day, url)
+            elif fmt == "eventlink":
+                events = parse_eventlink_events(get(url, params={"from": day.isoformat(), "to": day.isoformat()}).text, day, detail, url)
+            elif fmt == "school-calendar":
+                events = parse_school_calendar(get(url).text, day, detail, url)
             else:
                 events = parse_extra(get(url).text, fmt, day, name, url)
             return events, {"Source": name, "Status": f"Checked • {len(events)} matches", "URL": url}
         except (requests.RequestException, ValueError, TypeError, KeyError, AttributeError, IndexError):
-            return [], {"Source": name, "Status": "Unavailable / format changed", "URL": url}
+            return [], {"Source": name, "Status": "Not verified (blocked / date not visible / format changed)", "URL": url}
     events, coverage = [], []
     with ThreadPoolExecutor(max_workers=6) as pool:
         for found, status in pool.map(run, jobs):
@@ -414,7 +571,7 @@ def main():
     [data-testid="stHorizontalBlock"]{flex-wrap:wrap}h1{font-size:1.85rem!important}}
     </style>''', unsafe_allow_html=True)
     st.title("🛞 Washtenaw Gig Pilot Pro")
-    st.caption("Ann Arbor ↔ Ypsilanti • Kia Telluride • 16 MPG")
+    st.caption("Favour (Ogbuefi) • Ann Arbor ↔ Ypsilanti • Kia Telluride • 16 MPG")
     with st.sidebar:
         st.header("Pilot settings")
         base = st.text_input("Base camp", BASE)
@@ -447,7 +604,7 @@ def main():
             events_data = fetch_live_events(selected_date, setting("EVENT_FEEDS_JSON", "[]"))
             weather = fetch_weather(selected_date)
         st.subheader("Regional event footprint")
-        st.caption("Known published events, not a guarantee of complete street activity. Impact labels are planning estimates.")
+        st.caption("Known published events, not a guarantee of complete street activity. School pages may expose only their currently displayed month; blocked or out-of-range feeds are marked unverified.")
         for note in events_data["notes"]:
             st.warning(note)
         events = events_data["events"]
@@ -462,7 +619,7 @@ def main():
                     st.link_button("Event source", event["url"])
         with st.expander("Event source coverage"):
             st.dataframe(events_data["coverage"], hide_index=True, use_container_width=True)
-            st.caption(f"Checked {events_data['checked'].strftime('%b %d %I:%M %p %Z')}. Athletics pages cover their published season; missing seasons or feeds are not evidence of no events.")
+            st.caption(f"Checked {events_data['checked'].strftime('%b %d %I:%M %p %Z')}. Empty or blocked calendars never mean no traffic. Open each official source from its URL if coverage is incomplete.")
         st.subheader("Position & Routing Roadmap")
         st.caption(selected_date.strftime("%A, %B %d, %Y"))
         render_weather(weather)
