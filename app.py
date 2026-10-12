@@ -867,6 +867,202 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 </style>
 """
 
+WORKSPACES = ("Drive", "Events & Traffic", "Earnings & Fuel")
+
+
+def partition_events(events):
+    """Separate large venues from school/neighborhood congestion cues."""
+    major = [ev for ev in events if ev["tier"] != "NEIGHBORHOOD / SCHOOL"]
+    local = [ev for ev in events if ev["tier"] == "NEIGHBORHOOD / SCHOOL"]
+    return major, local
+
+
+def render_driving_card(slot, step):
+    """Compact timeline row; all routing instructions remain available on tap."""
+    with st.container(border=True):
+        left, right = st.columns([1.1, 2.65], gap="small", vertical_alignment="top")
+        with left:
+            st.markdown(f'<span class="pilot-timeline-time">{escape(slot["time"])}</span>',
+                        unsafe_allow_html=True)
+        with right:
+            st.markdown(f"**{roadmap_title(slot)}**")
+            st.caption(slot["app"])
+        with st.expander(f"Step {step} · Routing details", expanded=False):
+            st.write(slot["action"])
+
+
+def render_drive_workspace(selected_date, now, events_data, weather, base):
+    """Default view: a usable driving decision, not all source feeds."""
+    events = events_data["events"]
+    major, local = partition_events(events)
+    st.subheader("Your driving plan")
+    st.caption(selected_date.strftime("%A, %B %d, %Y") +
+               " · Chronological suggestions, not required shifts")
+    render_weather(weather, details=False)
+
+    home_game = next((ev for ev in events if selected_date.weekday() in (5, 6)
+                      and is_confirmed_michigan_home_game(ev)), None)
+    with st.expander("Adjust driving plan", expanded=False):
+        include_events = st.checkbox("Include major-event demand + traffic cues", value=True,
+                                     help="Only published times are used. Earnings are not guaranteed.")
+        include_local = st.checkbox("Include school-area traffic cues", value=True)
+        smart_game_day = home_game is not None
+        stop_buffer = 45
+        return_delay = 2.0
+        if home_game is not None:
+            smart_game_day = st.checkbox("Use Michigan game-day split shift", value=True)
+            if smart_game_day:
+                stop_buffer = st.slider("Stop before kickoff (minutes)", 30, 60, 45, 15)
+                return_delay = st.slider("Return after kickoff (hours)", 1.0, 4.0, 2.0, 0.5)
+
+    schedule = generate_schedule(
+        events, base, selected_date.weekday(),
+        include_event_cues=include_events, include_local=include_local,
+        smart_game_day=smart_game_day, stop_buffer_minutes=stop_buffer,
+        return_after_hours=return_delay)
+    drive_plan = filter_roadmap(schedule, "Driving")
+    next_step = next_planning_window(drive_plan, selected_date, now)
+
+    with st.container(border=True):
+        st.caption("UP NEXT" if selected_date >= now.date() else "PAST DATE")
+        if next_step:
+            st.markdown(f"**{roadmap_title(next_step)}**")
+            st.markdown(f'<span class="pilot-timeline-time">{escape(next_step["time"])}</span>',
+                        unsafe_allow_html=True)
+        elif selected_date < now.date():
+            st.caption("Choose today or a future date for upcoming recommendations.")
+        else:
+            st.caption("No more timed driving windows today. Check the other workspace before going out.")
+        if home_game and smart_game_day:
+            st.caption(f"Michigan kickoff: {clock(home_game['start'])}. "
+                       "The recommendation updates when the official time changes.")
+
+    st.markdown('<div class="pilot-section-head">Recommended windows</div>', unsafe_allow_html=True)
+    remaining = st.toggle("Hide finished windows", value=False, key="drive_remaining",
+                          help="On today, hide finished windows but keep active shifts.")
+    shown = filter_roadmap(drive_plan, selected_date=selected_date, now=now,
+                           remaining=remaining)
+    for i, slot in enumerate(shown, 1):
+        render_driving_card(slot, i)
+    if not shown:
+        st.info("No windows match. Turn off Hide finished windows to view the full plan.")
+
+    critical = [ev for ev in major if ev["tier"] == "CRITICAL IMPACT"]
+    if critical:
+        st.caption(f"⚠ {len(critical)} major stadium event(s) may affect traffic. "
+                   "Check Events & Traffic before approaching the area.")
+    elif major or local:
+        st.caption(f"{len(major)} major · {len(local)} local published events. "
+                   "See Events & Traffic for congestion details.")
+    if any(not row["Status"].startswith("Checked") for row in events_data["coverage"]):
+        st.caption("Some event sources could not be verified; coverage may be incomplete.")
+    st.button("Review events & traffic →", use_container_width=True,
+              on_click=lambda: st.session_state.update(pilot_workspace="Events & Traffic"))
+
+
+def render_events_workspace(selected_date, events_data, weather):
+    """Crowds, school traffic and optional advanced troubleshooting."""
+    major, local = partition_events(events_data["events"])
+    st.subheader("Events & Traffic")
+    st.caption(selected_date.strftime("%A, %B %d, %Y") +
+               " · Published congestion clues, not guaranteed surge")
+    a, b = st.columns(2, gap="small")
+    with a:
+        with st.container(border=True):
+            st.metric("Major venues", len(major))
+    with b:
+        with st.container(border=True):
+            st.metric("Local / schools", len(local))
+    for note in events_data["notes"]:
+        st.warning(note)
+    if not major and not local:
+        st.info("No matching events returned. This does not confirm normal traffic.")
+
+    with st.expander(f"🎟️ Major events ({len(major)})", expanded=True):
+        for ev in major:
+            with st.container(border=True):
+                st.markdown(f"**{ev['name']}**")
+                st.caption(f"{event_time_label(ev)} · {ev['venue']}")
+                impact = event_impact(ev)
+                st.write("**Traffic:** " + impact["traffic"])
+                with st.expander("Demand & routing context"):
+                    st.write("**Demand:** " + impact["demand"])
+                    st.write("**Route:** " + impact["action"])
+                    if ev["url"]:
+                        st.link_button("Official listing ↗", ev["url"])
+        if not major:
+            st.caption("No major events returned for this date.")
+
+    with st.expander(f"🚦 Schools & neighborhoods ({len(local)})", expanded=False):
+        st.caption("Traffic avoidance near performances and school venues.")
+        for ev in local:
+            with st.container(border=True):
+                st.markdown(f"**{ev['name']}**")
+                st.caption(f"{event_time_label(ev)} · {ev['venue']}")
+                st.write("**Traffic:** " + event_impact(ev)["traffic"])
+                if ev["url"]:
+                    st.link_button("Calendar source ↗", ev["url"])
+        if not local:
+            st.caption("No matching local events; school calendar coverage may be incomplete.")
+
+    with st.expander("Forecast details", expanded=False):
+        render_weather(weather, details=True)
+    with st.expander("Advanced · Feed diagnostics", expanded=False):
+        st.caption("Troubleshooting only. Not needed for normal driving decisions.")
+        st.dataframe(events_data["coverage"], hide_index=True, use_container_width=True)
+        st.caption(f"Checked {events_data['checked'].strftime('%b %d %I:%M %p %Z')}. "
+                   "TBD kickoff times update on a successful feed refresh.")
+
+
+def render_earnings_workspace():
+    """Fuel entry and weekly grading, without loading event/weather feeds."""
+    st.subheader("Earnings & Fuel")
+    st.caption("Your fuel cost and weekly earnings at 16 MPG.")
+    with st.container(border=True):
+        st.markdown("**⛽ Regular gas quick check**")
+        a, b = st.columns(2, gap="small")
+        with a:
+            st.link_button("GasBuddy · Ann Arbor ↗", GASBUDDY_ANN_ARBOR_URL, use_container_width=True)
+        with b:
+            st.link_button("GasBuddy · Ypsilanti ↗", GASBUDDY_YPSILANTI_URL, use_container_width=True)
+        st.number_input("Gas price you checked ($/gal)", min_value=0.0, max_value=15.0,
+                        value=0.0, step=0.01, key="checked_gas_price",
+                        help="Enter a checked regular-gas price. 0 means unavailable; stored in this session.")
+        st.caption("Community-reported prices may be wrong. Check the time, grade and membership conditions.")
+
+    live_gas = st.session_state.get("checked_gas_price", 0.0)
+    live_gas = live_gas if isinstance(live_gas, (int, float)) and live_gas >= 0.5 else None
+    st.subheader("Weekly Profit Grader")
+    if live_gas is None:
+        st.info("Enter a checked regular-gas price to enable grading.")
+    else:
+        st.caption(f"Using ${live_gas:.2f}/gal · {MPG:g} MPG")
+    with st.form("grader_form"):
+        gross = st.number_input("Gross earnings ($)", min_value=0.0, value=340.90)
+        hours = st.number_input("Total online hours", min_value=0.0, value=10.1)
+        miles = st.number_input("All driven miles, including deadhead", min_value=0.0, value=98.6)
+        submitted = st.form_submit_button("Grade my week", use_container_width=True,
+                                          disabled=live_gas is None)
+    if submitted:
+        st.session_state["last_shift"] = (gross, hours, miles)
+    if "last_shift" in st.session_state:
+        metrics = calculate_metrics(*st.session_state["last_shift"], live_gas)
+        if metrics:
+            st.metric("Efficiency grade", metrics["grade"])
+            a, b = st.columns(2, gap="small")
+            with a:
+                with st.container(border=True):
+                    st.metric("Gross hourly", f"${metrics['hourly_rate']:,.2f}/hr")
+            with b:
+                with st.container(border=True):
+                    st.metric("Gross per mile", f"${metrics['mile_rate']:,.2f}/mi")
+            st.metric("Fuel expense", f"${metrics['fuel_cost']:,.2f}")
+            st.success(f"After-fuel earnings: ${metrics['net_profit']:,.2f}")
+            st.caption("Fuel-only contribution; taxes, maintenance, depreciation and insurance excluded.")
+        else:
+            st.warning("Enter positive hours and miles and a checked fuel price.")
+
+
 def main():
     st.set_page_config(page_title="Midnight Pilot • Washtenaw Gig Pro",
                        page_icon="🛞", layout="centered", initial_sidebar_state="collapsed")
