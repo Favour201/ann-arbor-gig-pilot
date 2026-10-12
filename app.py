@@ -578,8 +578,17 @@ def window(start, end):
     return f"{clock(start)} – {clock(end)}{suffix}"
 
 
-def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True, include_local=False):
-    """Chronological advisory roadmap. Unknown-time events sort last, never as midnight."""
+def event_time_label(event):
+    """No fake kickoff time for unannounced games."""
+    if event["all_day"]:
+        if "football" in event["name"].lower() and "michigan stadium" in event["venue"].lower():
+            return "Kickoff TBD"
+        return "Time TBD / all day"
+    return clock(event["start"])
+
+
+def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True, include_local=True):
+    """Chronological driving windows, with local traffic context on by default."""
     timeline = []
     if day_of_week == 3:
         timeline.extend([
@@ -605,37 +614,33 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
                 "_minute": 20 * 60,
             })
 
-    if include_event_cues:
-        actions = {
-            "CRITICAL IMPACT": "Large crowds and traffic disruption possible near Michigan Stadium. Check real app rates, road closures and legal pickup areas before repositioning.",
-            "YPSI GAME DAY": "Potential EMU arrival/departure demand; verify actual wait times, pricing and pickup routes before traveling.",
-            "INDOOR ARENA": "Event-related pickup potential near the arena; avoid blocked entrances and check actual driver demand.",
-            "PERFORMING ARTS": "Possible after-show pickups near downtown theaters; do not assume surge or a profitable repositioning trip.",
-            "NEIGHBORHOOD / SCHOOL": "Localized school or neighborhood congestion may occur; not a reliable standalone rideshare or delivery signal.",
-        }
-        for event in events:
-            tier = event["tier"]
-            if tier == "NEIGHBORHOOD / SCHOOL" and not include_local:
-                continue
-            start, end = event["start"], event["end"]
-            if event["all_day"]:
-                label = "Time unconfirmed (optional context)"
-                sort_at = None
-            else:
-                lead = timedelta(hours=3 if tier == "CRITICAL IMPACT" else 1)
-                slot_start = start - lead
-                label = window(slot_start, start)
-                sort_at = slot_start.hour * 60 + slot_start.minute
-                if slot_start.date() < start.date():
-                    sort_at -= 24 * 60
-            action = f"{event['name']} • {event['venue']}. {actions[tier]}"
-            if end and not event["all_day"]:
-                action += f" Published end: {clock(end)}; recheck departure demand then."
-            else:
-                action += " End time unconfirmed; check the event before chasing departure demand."
-            timeline.append({"time": label, "app": f"{tier} · optional", "action": action,
-                             "_minute": sort_at})
-    # "None" signals unknown time and always sits after known windows.
+    for event in events:
+        local = event["tier"] == "NEIGHBORHOOD / SCHOOL"
+        if local and not include_local or not local and not include_event_cues:
+            continue
+        start, end = event["start"], event["end"]
+        if event["all_day"]:
+            label = "Kickoff TBD • timing unconfirmed" if event_time_label(event) == "Kickoff TBD" else "Time TBD • timing unconfirmed"
+            sort_at = None
+        else:
+            lead = timedelta(hours=3 if event["tier"] == "CRITICAL IMPACT" else 1)
+            slot_start = start - lead
+            label = window(slot_start, start)
+            sort_at = slot_start.hour * 60 + slot_start.minute
+            if slot_start.date() < start.date():
+                sort_at -= 24 * 60
+        signal = event_impact(event)
+        action = (f"{event['name']} • {event['venue']}. "
+                  f"Traffic: {signal['traffic']} "
+                  f"Demand: {signal['demand']} "
+                  f"Plan: {signal['action']}")
+        if end and not event["all_day"]:
+            action += f" Published end: {clock(end)}; recheck the area then."
+        else:
+            action += " Departure time unconfirmed; do not assume a fixed exit window."
+        tag = ("NEIGHBORHOOD / SCHOOL · traffic advisory" if local
+               else f"{event['tier']} · demand + traffic advisory")
+        timeline.append({"time": label, "app": tag, "action": action, "_minute": sort_at})
     timeline.sort(key=lambda item: (item["_minute"] is None,
                                    item["_minute"] if item["_minute"] is not None else 10**9,
                                    item["app"]))
@@ -703,7 +708,7 @@ def main():
             events_data = fetch_live_events(selected_date, setting("EVENT_FEEDS_JSON", "[]"))
             weather = fetch_weather(selected_date)
         st.subheader("Regional event footprint")
-        st.caption("Known published events, not a guarantee of complete street activity. School pages may expose only their currently displayed month; blocked or out-of-range feeds are marked unverified.")
+        st.caption("Events can affect rideshare, delivery and traffic in different ways. This is routing intelligence, not guaranteed surge. Source pages limited to the current month or blocked are marked unverified.")
         for note in events_data["notes"]:
             st.warning(note)
         events = events_data["events"]
@@ -713,29 +718,29 @@ def main():
             st.info("No matching events returned by available feeds. This does not confirm normal traffic.")
         for event in major_events:
             with st.container(border=True):
-                st.caption(f"{event['tier']} · Advisory only")
+                st.caption(f"{event['tier']} · Demand + traffic advisory")
                 st.write(f"**{event['name']}**")
-                st.write(f"{event['venue']} · {'Time TBD / all day' if event['all_day'] else clock(event['start'])}")
+                st.write(f"{event['venue']} · {event_time_label(event)}")
+                st.caption("Traffic: " + event_impact(event)["traffic"])
                 if event["url"]:
                     st.link_button("Event source", event["url"])
-        with st.expander(f"Neighborhood and school context ({len(local_events)}) • low-confidence"):
-            st.caption("Mostly a local traffic/congestion indicator, not a reliable gig surge forecast.")
+        with st.expander(f"School / neighborhood traffic alerts ({len(local_events)})", expanded=bool(local_events)):
+            st.caption("Useful to avoid localized queues around performances and school events. These are not instructions to chase rides.")
             for event in local_events:
-                st.write(f"**{event['name']}** · {event['venue']} · " +
-                         ("Time unconfirmed" if event["all_day"] else clock(event["start"])))
+                st.write(f"**{event['name']}** · {event['venue']} · {event_time_label(event)}")
+                st.caption("Traffic: " + event_impact(event)["traffic"])
                 if event["url"]:
                     st.link_button("Calendar source", event["url"])
         with st.expander("Event source coverage"):
             st.dataframe(events_data["coverage"], hide_index=True, use_container_width=True)
-            st.caption(f"Checked {events_data['checked'].strftime('%b %d %I:%M %p %Z')}. Empty or blocked calendars never mean no traffic. Open each official source from its URL if coverage is incomplete.")
+            st.caption(f"Checked {events_data['checked'].strftime('%b %d %I:%M %p %Z')}. Michigan kickoff times marked TBD update when the official athletics schedule publishes a clock time. Feeds refresh on dashboard rerun after 30 minutes or immediately via Refresh live sources; there is no background push notification. Blocked feeds never mean no traffic.")
         st.subheader("Position & Routing Roadmap")
         st.caption(selected_date.strftime("%A, %B %d, %Y") +
                    " • Earliest windows first. Event cues are optional, not scheduled shifts.")
-        include_events = st.checkbox("Include major-event cues in roadmap", value=True,
-                                     help="Advisory only. No event guarantees a surge or profitable trip.")
-        include_local = st.checkbox("Also show school and neighborhood cues", value=False,
-                                    disabled=not include_events,
-                                    help="These signals mainly indicate localized congestion, not strong gig demand.")
+        include_events = st.checkbox("Include major-event demand + traffic cues", value=True,
+                                     help="Optional demand and congestion context, not a promise of paid trips.")
+        include_local = st.checkbox("Show school / neighborhood traffic advisories", value=True,
+                                    help="Traffic avoidance cues, independent of rideshare event targeting.")
         render_weather(weather)
         for slot in generate_schedule(events, base, selected_date.weekday(),
                                       include_event_cues=include_events, include_local=include_local):
