@@ -985,11 +985,10 @@ def render_events_workspace(selected_date, events_data, weather):
                 st.caption(f"{event_time_label(ev)} · {ev['venue']}")
                 impact = event_impact(ev)
                 st.write("**Traffic:** " + impact["traffic"])
-                with st.expander("Demand & routing context"):
-                    st.write("**Demand:** " + impact["demand"])
-                    st.write("**Route:** " + impact["action"])
-                    if ev["url"]:
-                        st.link_button("Official listing ↗", ev["url"])
+                st.caption("Demand: " + impact["demand"])
+                st.caption("Route: " + impact["action"])
+                if ev["url"]:
+                    st.link_button("Official listing ↗", ev["url"])
         if not major:
             st.caption("No major events returned for this date.")
 
