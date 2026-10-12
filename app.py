@@ -665,6 +665,89 @@ def render_weather(weather):
                 st.link_button("NWS source", place["url"])
 
 
+
+
+def greeting_for_hour(hour):
+    """Time-appropriate personalized greeting for the local driver."""
+    if not isinstance(hour, int) or not 0 <= hour < 24:
+        raise ValueError("hour must be an integer from 0 to 23")
+    part = "Good morning" if hour < 12 else "Good afternoon" if hour < 17 else "Good evening"
+    return f"{part}, Ogbuefi"
+
+
+def roadmap_title(slot):
+    """Compact headline, leaving full routing guidance in an expander."""
+    if slot["app"] == "Delivery":
+        return "Delivery window"
+    if slot["app"] == "XL / Comfort":
+        return "Check rideshare demand"
+    return slot["action"].split(" • ", 1)[0]
+
+
+MIDNIGHT_CSS = """
+<style>
+:root {color-scheme:dark;}
+html,body,[data-testid="stAppViewContainer"],.stApp {background:#111B2A !important;color:#F0F6FF !important;}
+[data-testid="stHeader"] {background:rgba(17,27,42,.94) !important;}
+[data-testid="stSidebar"] {background:#162338 !important;}
+.block-container {max-width:960px !important;padding-top:1.25rem !important;padding-bottom:3rem !important;}
+h1,h2,h3 {color:#F8FAFF !important;letter-spacing:-.02em;}
+h2 {font-size:1.33rem !important;}
+[data-testid="stCaptionContainer"],small {color:#AEBDD2 !important;}
+[data-testid="stVerticalBlockBorderWrapper"] {
+  background:#1B2A3F;border:1px solid #344962 !important;border-radius:15px !important;
+}
+[data-testid="stMetricLabel"] p {color:#B9C9DE !important;font-size:.81rem;}
+[data-testid="stMetricValue"] {font-size:1.55rem !important;color:#FBFDFF !important;}
+[data-testid="stTabs"] [data-baseweb="tab-list"] {gap:.6rem;border-bottom:1px solid #30445F;}
+[data-testid="stTabs"] button[data-baseweb="tab"] {
+  min-height:48px !important;color:#B7CBE4 !important;font-weight:650 !important;
+}
+[data-testid="stTabs"] button[data-baseweb="tab"][aria-selected="true"] {
+  color:#A1CFFF !important;background:#1D2E45 !important;
+}
+[data-testid="stExpander"] {
+  border:1px solid #35465F !important;border-radius:12px !important;background:#19283D;
+}
+[data-testid="stExpander"] summary {min-height:46px;font-weight:560;color:#EAF2FF;}
+.stButton button,.stLinkButton a,[data-testid="stFormSubmitButton"] button {
+  min-height:46px !important;border-radius:10px !important;font-weight:650 !important;
+}
+button:focus-visible,a:focus-visible,input:focus-visible,
+[data-testid="stExpander"] summary:focus-visible {
+  outline:3px solid #8BC8FF !important;outline-offset:3px !important;
+}
+[data-testid="stAlert"] {border-radius:11px;}
+.pilot-hero {
+  border:1px solid #32506F;border-radius:20px;
+  background:linear-gradient(120deg,#223954 0%,#17283D 60%,#1E3451 100%);
+  padding:22px 24px 20px;margin-bottom:.75rem;
+}
+.pilot-eyebrow {color:#AAC9EB;font-size:.74rem;font-weight:750;letter-spacing:.13em;text-transform:uppercase;}
+.pilot-greeting {color:#FCFDFF;font-size:clamp(1.55rem,3.8vw,2.18rem);font-weight:790;line-height:1.2;margin:.42rem 0;}
+.pilot-subtitle {color:#BED0E7;font-size:.86rem;line-height:1.5;}
+.pilot-line {width:72px;height:3px;border-radius:9px;background:#85BFFF;margin-top:16px;}
+.pilot-kicker {color:#94C8FF;font-size:.75rem;font-weight:770;letter-spacing:.1em;text-transform:uppercase;}
+.pilot-timeline-time {color:#9CCFFF;font-size:.93rem;font-weight:750;}
+.weather-premium {
+  background:#4A3718 !important;color:#FFECC2 !important;
+  border:1px solid #C99B3D !important;border-radius:12px;
+  padding:14px 16px;margin:12px 0;line-height:1.58;
+}
+.weather-premium strong,.weather-premium small {color:#FFE9B3 !important;}
+@media(max-width:600px){
+  .block-container {padding:.85rem .85rem 2.5rem !important;}
+  .pilot-hero {padding:18px 16px;border-radius:16px;}
+  .pilot-subtitle {font-size:.8rem;}
+  [data-testid="stMetricValue"] {font-size:1.3rem !important;}
+  [data-testid="stHorizontalBlock"] {gap:.45rem !important;}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after {transition-duration:0s !important;animation-duration:0s !important;}
+}
+</style>
+"""
+
 def main():
     st.set_page_config(page_title="Washtenaw Gig Pilot Pro", page_icon="🛞", layout="centered")
     st.markdown('''<style>
