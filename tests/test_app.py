@@ -148,25 +148,71 @@ def test_roadmap_chronology_early_events_before_evening_shift():
     assert slots[3]["time"] == "8:30 PM onward"
 
 
-def test_school_cues_opt_in_and_not_mandatory():
-    school = app.event_record("Homecoming Game", "Pioneer High School",
+def test_school_traffic_on_by_default_but_remains_optional():
+    school = app.event_record("Pioneer Fall Choir Concert", "Pioneer High School",
                               "2026-10-15T19:00:00-04:00", None, "School")
     stadium = app.event_record("Michigan Football", "Michigan Stadium",
                                "2026-10-15T15:30:00-04:00", None, "U-M")
     default = app.generate_schedule([school, stadium], app.BASE, 3)
-    assert not any(slot["app"].startswith("NEIGHBORHOOD") for slot in default)
+    assert any(slot["app"].startswith("NEIGHBORHOOD") for slot in default)
+    assert any("Pioneer campus" in slot["action"] for slot in default)
     assert any(slot["app"].startswith("CRITICAL") for slot in default)
-    opted = app.generate_schedule([school, stadium], app.BASE, 3, include_local=True)
-    assert any(slot["app"].startswith("NEIGHBORHOOD") for slot in opted)
-    pure = app.generate_schedule([school, stadium], app.BASE, 3, include_event_cues=False)
-    assert all(slot["app"] in ("Delivery", "XL / Comfort") for slot in pure)
+    opt_out = app.generate_schedule([school, stadium], app.BASE, 3, include_local=False)
+    assert not any(slot["app"].startswith("NEIGHBORHOOD") for slot in opt_out)
+    traffic_only = app.generate_schedule([school, stadium], app.BASE, 3, include_event_cues=False)
+    assert any(slot["app"].startswith("NEIGHBORHOOD") for slot in traffic_only)
+    assert not any(slot["app"].startswith("CRITICAL") for slot in traffic_only)
+    baseline = app.generate_schedule([school, stadium], app.BASE, 3,
+                                     include_local=False, include_event_cues=False)
+    assert all(slot["app"] in ("Delivery", "XL / Comfort") for slot in baseline)
+    impact = app.event_impact(school)
+    assert "Performance arrival/departure" in impact["traffic"]
+    assert "uncertain" in impact["demand"]
+
 
 
 def test_unknown_kickoff_timing_is_separate_and_last():
     mystery = app.event_record("Unconfirmed kickoff", "Michigan Stadium",
                                "2026-10-15", None, "Fixture", all_day=True)
     slots = app.generate_schedule([mystery], app.BASE, 3)
-    assert slots[-1]["time"] == "Time unconfirmed (optional context)"
-    assert "optional" in slots[-1]["app"]
+    assert slots[-1]["time"] == "Kickoff TBD • timing unconfirmed"
+    assert "advisory" in slots[-1]["app"]
     assert slots[0]["time"] == "6:00 PM – 8:30 PM"
+
+def test_michigan_kickoff_tbd_then_official_time_updates():
+    table = [None, {"date": 2, "opponent": 3, "location_indicator": 4,
+                    "location": 5, "time": 6, "tbd": 7},
+             "2026-11-21", {"title": 8}, "H", "Ann Arbor, Mich.", "TBA", True,
+             "Ohio State"]
+    def fetch_fixture():
+        return '<script id="__NUXT_DATA__">' + json.dumps(table) + '</script>'
+
+    unknown = app.parse_sidearm(fetch_fixture(), date(2026, 11, 21),
+                                "Michigan", "football", "https://mgoblue.com/sports/football/schedule")
+    assert len(unknown) == 1
+    assert unknown[0]["all_day"] is True
+    assert app.event_time_label(unknown[0]) == "Kickoff TBD"
+    assert app.generate_schedule(unknown, app.BASE, 5)[-1]["time"].startswith("Kickoff TBD")
+
+    # Same published game with an announced kickoff: this is fetched again after cache refresh.
+    table[6], table[7] = "3:30 PM ET", False
+    announced = app.parse_sidearm(fetch_fixture(), date(2026, 11, 21),
+                                  "Michigan", "football", "https://mgoblue.com/sports/football/schedule")
+    assert len(announced) == 1
+    assert not announced[0]["all_day"]
+    assert (announced[0]["start"].hour, announced[0]["start"].minute) == (15, 30)
+    assert app.event_time_label(announced[0]) == "3:30 PM"
+    assert any(slot["time"] == "12:30 PM – 3:30 PM"
+               for slot in app.generate_schedule(announced, app.BASE, 5))
+
+
+def test_official_schedule_clock_explicit_not_midnight_guessed():
+    tba, is_tbd = app.resolve_published_start("2026-10-17T15:30:00-04:00", "TBA")
+    assert is_tbd and tba.hour == 0
+    early, is_tbd = app.resolve_published_start("2026-10-17", "12:00 PM")
+    assert not is_tbd and early.hour == 12
+    midnight, is_tbd = app.resolve_published_start("2026-10-17", "")
+    assert is_tbd and midnight.hour == 0
+    noon, is_tbd = app.resolve_published_start("2026-10-17", "Noon")
+    assert not is_tbd and noon.hour == 12
 
