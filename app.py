@@ -77,20 +77,28 @@ def generate_schedule(events, base_camp, day_of_week):
         dinner_window = f"{kickoff_hour + 2}:00 PM - {kickoff_hour + 3}:30 PM"
         breakout_time = f"{kickoff_hour + 3}:30 PM"
         
-        timeline.append({"time": f"{pregame_start} - {pregame_end}", "app": "UberXL / Lyft XL ONLY", "action": f"Pre-Game Surge for Kickoff at {raw_time}. Stage at East AA / Ypsi hotel corridors heading toward stadium. Avoid downtown core grids."})
+        # Format strings for standard 12-hour AM/PM presentation
+        p_start = f"{kickoff_hour - 4 if kickoff_hour - 4 <= 12 else kickoff_hour - 16}:00 {'AM' if kickoff_hour - 4 < 12 else 'PM'}"
+        p_end = f"{kickoff_hour - 1 if kickoff_hour - 1 <= 12 else kickoff_hour - 13}:00 {'AM' if kickoff_hour - 1 < 12 else 'PM'}"
+        g_start = f"{kickoff_hour - 1 if kickoff_hour - 1 <= 12 else kickoff_hour - 13}:00 PM"
+        g_end = f"{kickoff_hour + 2 - 12 if kickoff_hour + 2 > 12 else kickoff_hour + 2}:00 PM"
+        d_end = f"{kickoff_hour + 3 - 12 if kickoff_hour + 3 > 12 else kickoff_hour + 3}:30 PM"
+        b_start = f"{kickoff_hour + 3 - 12 if kickoff_hour + 3 > 12 else kickoff_hour + 3}:30 PM"
+
+        timeline.append({"time": f"{p_start} - {p_end}", "app": "UberXL / Lyft XL ONLY", "action": f"Pre-Game Surge for Kickoff at {raw_time}. Stage at East AA / Ypsi hotel corridors heading toward stadium. Avoid downtown core grids."})
         if emu_game:
             timeline.append({"time": "⚠️ TRAFFIC ALERT", "app": "VENUE CONFLICT", "action": f"EMU Home game overlap active: {emu_game['name']} at {emu_game['time']}. Avoid Hewitt Road corridors completely."})
-        timeline.append({"time": game_window, "app": "OFFLINE", "action": f"Stadium gates closed. Head directly back to your staging base at {base_camp}. Core gridlock peak. Protect fuel cell."})
-        timeline.append({"time": dinner_window, "app": "DoorDash / Uber Eats", "action": "In-game watch party dinner rush. Stacking deliveries from Carpenter Road heading East/North on wide-open roads."})
-        timeline.append({"time": f"{breakout_time} - 10:30 PM+", "app": "UberXL / Lyft XL ONLY", "action": f"Post-game stadium breakout! Camp at Industrial Hwy periphery (CVS/Produce Station). Exit routes via I-94 straight back to {base_camp}."})
+        timeline.append({"time": f"{g_start} - {g_end}", "app": "OFFLINE", "action": f"Stadium gates closed. Head directly back to your staging base at {base_camp}. Core gridlock peak. Protect fuel cell."})
+        timeline.append({"time": f"{g_end} - {d_end}", "app": "DoorDash / Uber Eats", "action": "In-game watch party dinner rush. Stacking deliveries from Carpenter Road heading East/North on wide-open roads."})
+        timeline.append({"time": f"{b_start} - 10:30 PM+", "app": "UberXL / Lyft XL ONLY", "action": f"Post-game stadium breakout! Camp at Industrial Hwy periphery (CVS/Produce Station). Exit routes via I-94 straight back to {base_camp}."})
         return timeline
     
     # SYSTEM RULE 3: STANDARD SHIFT (FRIDAY/SATURDAY/SUNDAY NIGHTS)
     else:
-        if day_of_week in: # Friday or Saturday
+        if day_of_week in [4, 5]: # 4 = Friday, 5 = Saturday
             timeline.append({"time": "5:00 PM - 8:00 PM", "app": "DoorDash / Uber Eats", "action": "Weekend evening dinner rush. Maximize Carpenter Rd commercial hub stacks."})
             timeline.append({"time": "8:00 PM - 11:00 PM+", "app": "UberXL / Uber Comfort ON", "action": "Nightlife lounges and evening bar runs active. Work downtown grids safely without stadium blockades."})
-        elif day_of_week == 6: # Sunday
+        elif day_of_week == 6: # 6 = Sunday
             timeline.append({"time": "4:30 PM - 9:30 PM", "app": "100% DoorDash / Uber Eats", "action": f"Sunday recovery dinner surge. Stay parked right at {base_camp} and run high-tip restaurant deliveries cleanly."})
             
     return timeline
