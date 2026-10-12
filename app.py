@@ -1,11 +1,6 @@
 """Washtenaw Gig Pilot Pro. Run: streamlit run app.py (Python 3.10+).
 
-Optional operator settings (environment or Streamlit secrets):
-FUEL_FEED_URL: HTTPS JSON endpoint: {"prices": [{"station_id": "bp_washtenaw",
-  "regular": 3.49, "observed_at": "2026-10-12T14:00:00Z"}]}
-Additional stations: station_id, name, address, latitude, longitude, member (bool),
-regular (USD/US gallon), observed_at; filtered to the chosen radius.
-FUEL_FEED_TOKEN: optional bearer token, never rendered or logged.
+Optional operator setting (environment or Streamlit secrets):
 EVENT_FEEDS_JSON: JSON array of {name, url, format: json|ics|jsonld}.
 JSON events: {"events": [{"name", "venue", "start", "end" (optional), "url"}]}
 Use local ISO dates for all-day/TBD events, offset-aware timestamps otherwise.
@@ -33,19 +28,9 @@ MPG = 16.0
 TZ = ZoneInfo("America/New_York")
 BASE = "2100 Arbor Circle E"
 USER_AGENT = "WashtenawGigPilot/2.0 (https://github.com/Favour201/ann-arbor-gig-pilot)"
-FUEL_MAX_AGE = timedelta(hours=24)
 COLD_F = 15  # Operational threshold, not an official NWS warning criterion.
-STATIONS = [
-    {"id": "bp_washtenaw", "name": "BP • Priority stop", "address": "3031 Washtenaw Ave", "member": False,
-     "url": "https://www.oilmonster.com/gas-station/bp/ann-arbor/3031-washtenaw-ave/9836"},
-    {"id": "sams_carpenter", "name": "Sam's Club", "address": "5450 Carpenter Rd", "member": True, "url": ""},
-    {"id": "costco_airport", "name": "Costco", "address": "771 Airport Blvd", "member": True,
-     "url": ""},
-    {"id": "bp_east", "name": "BP", "address": "4975 Washtenaw Ave", "member": False,
-     "url": "https://www.oilmonster.com/gas-station/bp/ann-arbor/4975-washtenaw-ave/9839"},
-    {"id": "marathon_washtenaw", "name": "Marathon", "address": "3555 Washtenaw Ave", "member": False,
-     "url": "https://www.oilmonster.com/gas-station/marathon-petroleum-corporation-mpc/ann-arbor/3555-washtenaw-ave/5785"},
-]
+GASBUDDY_ANN_ARBOR_URL = "https://www.gasbuddy.com/home?search=Ann%20Arbor%2C%20MI&fuel=1"
+GASBUDDY_YPSILANTI_URL = "https://www.gasbuddy.com/home?search=Ypsilanti%2C%20MI&fuel=1"
 POINTS = {"Ann Arbor": (42.2808, -83.7430), "Ypsilanti": (42.2411, -83.6130)}
 TIERS = ("CRITICAL IMPACT", "YPSI GAME DAY", "INDOOR ARENA", "PERFORMING ARTS", "NEIGHBORHOOD / SCHOOL")
 
@@ -97,172 +82,6 @@ def day_bounds(day):
 def overlaps(start, end, day):
     lower, upper = day_bounds(day)
     return start < upper and end > lower
-
-
-def price_number(value):
-    number = float(value)
-    if not math.isfinite(number) or not 0.5 <= number <= 15:
-        raise ValueError("Invalid regular fuel quote")
-    return number
-
-
-def miles_between(lat, lon, center=(42.256, -83.680)):
-    lat1, lat2 = map(math.radians, (center[0], lat))
-    dlat = lat2 - lat1
-    dlon = math.radians(lon - center[1])
-    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
-    return 3958.8 * 2 * math.asin(min(1, math.sqrt(a)))
-
-
-def parse_fuel_feed(payload, now, radius=10):
-    """Accept priority stations plus any geolocated station inside the radius."""
-    quotes = {}
-    records = payload.get("prices")
-    if not isinstance(records, list):
-        raise ValueError("Expected prices array")
-    for row in records:
-        try:
-            sid = row["station_id"]
-            known = next((s for s in STATIONS if s["id"] == sid), None)
-            metadata = {}
-            if known is None:
-                lat, lon = float(row["latitude"]), float(row["longitude"])
-                if not (-90 <= lat <= 90 and -180 <= lon <= 180) or miles_between(lat, lon) > radius:
-                    continue
-                if not isinstance(row.get("member", False), bool):
-                    continue
-                metadata = {"id": str(sid), "name": str(row["name"]), "address": str(row["address"]),
-                            "member": row.get("member", False), "url": safe_url(row.get("url", "")),
-                            "source": "Configured fuel provider"}
-            if row.get("currency", "USD") != "USD" or row.get("unit", "gallon") not in ("gallon", "US gallon"):
-                continue
-            stamp = datetime.fromisoformat(row["observed_at"].replace("Z", "+00:00"))
-            if stamp.tzinfo is None:
-                continue
-            stamp = stamp.astimezone(TZ)
-            age = now - stamp
-            price = price_number(row["regular"])
-            if timedelta(minutes=-5) <= age <= FUEL_MAX_AGE:
-                if sid not in quotes or stamp > quotes[sid]["observed_at"]:
-                    quotes[sid] = {**metadata, "price": price, "observed_at": stamp, "status": "Current report"}
-        except (KeyError, TypeError, ValueError, OverflowError):
-            continue
-    return quotes
-
-
-def parse_public_fuel(html):
-    """Only the station's Regular card, never a city average or premium price."""
-    soup = BeautifulSoup(html, "html.parser")
-    for card in soup.select(".gaspriceboxdetailp"):
-        label = card.select_one(".oilpriceaveragehd")
-        value = card.select_one(".stationprice")
-        if label and label.get_text(strip=True).lower() == "regular" and value:
-            match = re.fullmatch(r"\$?\s*(\d+\.\d{2,3})", value.get_text(strip=True))
-            return price_number(match.group(1)) if match else None
-    raise ValueError("Station price markup unavailable")
-
-
-@st.cache_data(ttl=900, max_entries=8, show_spinner=False)
-def fetch_live_fuel(feed_url="", radius=10, _token=""):
-    now = datetime.now(TZ)
-    quotes, notes = {}, []
-    if feed_url:
-        try:
-            quotes = parse_fuel_feed(get(feed_url, token=_token, params={"latitude": 42.256, "longitude": -83.680, "radius_miles": radius}).json(), now, radius)
-            if not quotes:
-                notes.append("Fuel provider returned no valid corridor reports from the last 24 hours.")
-        except (requests.RequestException, ValueError, TypeError, AttributeError):
-            notes.append("Fuel provider unavailable or response invalid.")
-
-    def scan(station):
-        result = {**station, "price": None, "observed_at": None, "status": "Feed connection needed"}
-        if station["id"] in quotes:
-            return {**result, **quotes[station["id"]], "source": "Configured fuel provider"}
-        result["status"] = "No timestamped price • check station directly"
-        return {**result, "source": "Station reference (not a price feed)"}
-
-    # BP is first in the lookup matrix; ranking still uses actual price.
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        stations = list(pool.map(scan, STATIONS))
-    stations.extend(q for sid, q in quotes.items() if sid not in {s["id"] for s in STATIONS})
-    return {"stations": stations, "notes": notes, "checked": now}
-
-
-def current_quotes(fuel, now=None):
-    now = now or datetime.now(TZ)
-    return sorted([s for s in fuel["stations"] if s.get("observed_at") is not None
-                   and timedelta(minutes=-5) <= now - s["observed_at"] <= FUEL_MAX_AGE],
-                  key=lambda s: (s["price"], s["id"] != "bp_washtenaw"))
-
-
-
-FUEL_LOG_KEY = "washtenaw_gig_prices_v1"
-
-
-def validated_driver_history(raw, now=None):
-    """Validate driver-entered records; retain at most 30 days for historical display."""
-    now = now or datetime.now(TZ)
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except ValueError:
-            return []
-    if not isinstance(raw, list):
-        return []
-    latest = {}
-    for row in raw[:100]:
-        try:
-            if not isinstance(row, dict):
-                continue
-            station = next((s for s in STATIONS if s["id"] == row["station_id"]), None)
-            if station is None:
-                continue
-            stamp = datetime.fromisoformat(str(row["observed_at"]).replace("Z", "+00:00"))
-            if stamp.tzinfo is None:
-                continue
-            stamp = stamp.astimezone(TZ)
-            if not timedelta(minutes=-5) <= now - stamp <= timedelta(days=30):
-                continue
-            quote = {"station_id": station["id"], "regular": price_number(row["regular"]),
-                     "observed_at": stamp.isoformat(), "paid": row.get("paid") is True}
-            if station["id"] not in latest or stamp > local_dt(latest[station["id"]]["observed_at"]):
-                latest[station["id"]] = quote
-        except (KeyError, ValueError, TypeError, OverflowError):
-            continue
-    return sorted(latest.values(), key=lambda q: q["observed_at"], reverse=True)
-
-
-def merge_driver_reports(fuel, history, now=None):
-    """Only <=24h old entries affect planning; preserve newer timestamped provider quotes."""
-    now = now or datetime.now(TZ)
-    stations = [dict(s) for s in fuel["stations"]]
-    by_id = {s["id"]: s for s in stations}
-    for row in validated_driver_history(history, now):
-        stamp = local_dt(row["observed_at"])
-        if now - stamp > FUEL_MAX_AGE:
-            continue
-        quote = by_id.get(row["station_id"])
-        if quote is None:
-            continue
-        if quote.get("observed_at") is None or stamp > quote["observed_at"]:
-            quote.update(price=row["regular"], observed_at=stamp,
-                         source="Driver-entered • unverified",
-                         status="Saved on this browser")
-    return {**fuel, "stations": stations}
-
-
-def fuel_detour_value(reference_price, alternate_price, gallons, extra_round_trip_miles):
-    """Net pump-price saving after additional 16 MPG detour fuel."""
-    reference_price = price_number(reference_price)
-    alternate_price = price_number(alternate_price)
-    if not (math.isfinite(gallons) and gallons > 0
-            and math.isfinite(extra_round_trip_miles) and extra_round_trip_miles >= 0):
-        raise ValueError("Refill and detour mileage must be valid")
-    pump_savings = gallons * (reference_price - alternate_price)
-    detour_fuel_cost = extra_round_trip_miles / MPG * alternate_price
-    return {"pump_savings": round(pump_savings, 2),
-            "detour_fuel_cost": round(detour_fuel_cost, 2),
-            "net_savings": round(pump_savings - detour_fuel_cost, 2)}
 
 
 def classify(venue, name=""):
@@ -600,86 +419,27 @@ def main():
         st.header("Pilot settings")
         base = st.text_input("Base camp", BASE)
         st.caption("Changing base camp updates the roadmap; the monitored corridor remains Ann Arbor / Ypsilanti.")
-        radius = st.slider("Fuel search radius (miles)", 5, 30, 10,
-                           help="Centered on the Ann Arbor / Ypsilanti corridor. Applies to additional stations returned by the connected provider.")
         if st.button("Refresh live sources", use_container_width=True):
-            fetch_live_fuel.clear()
             fetch_live_events.clear()
             fetch_weather.clear()
-        st.caption("Fuel / weather: 15-minute cache. Events: 30-minute cache. Sources refresh on interaction; use Refresh for an immediate check.")
-    with st.spinner("Checking timestamped gas prices…"):
-        remote_fuel = fetch_live_fuel(setting("FUEL_FEED_URL"), radius, setting("FUEL_FEED_TOKEN"))
-    store = None
-    try:
-        from streamlit_local_storage import LocalStorage
-        store = LocalStorage()
-        browser_history = store.getItem(FUEL_LOG_KEY, key="price_history")
-    except (ImportError, RuntimeError, ValueError, AttributeError):
-        browser_history = None
-    if browser_history is not None and "driver_price_history" not in st.session_state:
-        st.session_state["driver_price_history"] = validated_driver_history(browser_history)
-    history = validated_driver_history(st.session_state.get("driver_price_history", []))
-    with st.expander("✍️ Log a checked pump price"):
-        st.caption("Prices are driver-entered, not independently verified. Browser storage is best effort.")
-        with st.form("fuel_log_form"):
-            station_id = st.selectbox("Station", [x["id"] for x in STATIONS],
-                  format_func=lambda sid: next(x["name"] + " · " + x["address"] for x in STATIONS if x["id"] == sid))
-            observed_price = st.number_input("Regular price ($/gallon)", min_value=0.5, max_value=15.0, value=3.5, step=0.01)
-            paid_quote = st.checkbox("I paid this price")
-            saved = st.form_submit_button("Save observed price", use_container_width=True)
-        if saved:
-            entry = {"station_id": station_id, "regular": observed_price,
-                     "observed_at": datetime.now(TZ).isoformat(), "paid": paid_quote}
-            history = validated_driver_history([entry] + history)
-            st.session_state["driver_price_history"] = history
-            if store is not None:
-                try:
-                    store.setItem(FUEL_LOG_KEY, json.dumps(history), key="price_history_write")
-                except (RuntimeError, ValueError, AttributeError):
-                    st.warning("Price saved for this session only; browser persistence unavailable.")
-            else:
-                st.warning("Price saved for this session only; browser persistence unavailable.")
-            st.success("Driver price recorded.")
-        for item in history[:10]:
-            name = next(x["name"] for x in STATIONS if x["id"] == item["station_id"])
-            st.caption(f"{name}: ${item['regular']:.3f} • {local_dt(item['observed_at']).strftime('%b %d %I:%M %p')}")
-    fuel = merge_driver_reports(remote_fuel, history)
-    ranked = current_quotes(fuel)
-    live_gas = ranked[0]["price"] if ranked else None
-    if ranked:
-        st.metric("Lowest recent regular report", f"${live_gas:.3f}/gal")
-        st.caption(f"{ranked[0]['name']} · {ranked[0]['source']} · {ranked[0]['address']}" +
-                   (" · Membership required" if ranked[0]["member"] else ""))
+        st.caption("Weather: 15-minute cache. Events: 30-minute cache. Refresh applies to events and forecasts.")
+    st.subheader("⛽ Find nearby regular gas")
+    st.caption("Open GasBuddy to inspect reported prices. These links search Ann Arbor and Ypsilanti; GasBuddy's Find Gas feature can use your device location when enabled.")
+    first, second = st.columns(2)
+    with first:
+        st.link_button("GasBuddy • Ann Arbor", GASBUDDY_ANN_ARBOR_URL, use_container_width=True)
+    with second:
+        st.link_button("GasBuddy • Ypsilanti", GASBUDDY_YPSILANTI_URL, use_container_width=True)
+    st.caption("Check the report time, regular unleaded grade, station, and any membership or cash-only conditions. These are external lookups, not an automatic price feed.")
+    live_gas_input = st.number_input(
+        "Gas price you checked ($/gal)",
+        min_value=0.0, max_value=15.0, value=0.0, step=0.01, key="checked_gas_price",
+        help="Type the regular gas price from GasBuddy or the pump. Enter 0 to mark it unknown. Saved only for this dashboard session.")
+    live_gas = live_gas_input if live_gas_input >= 0.5 else None
+    if live_gas is None:
+        st.info("Enter a checked regular gas price above to enable the Weekly Profit Grader. No price is assumed.")
     else:
-        st.info("No trustworthy dated fuel report available. Log a price you have checked above.")
-    with st.expander("⛽ Corridor price monitor", expanded=not bool(ranked)):
-        st.caption("Undated scraped prices, including suspicious Costco quotes, are excluded. Reports older than 24 hours do not set the grader price.")
-        order = ranked + [x for x in fuel["stations"] if x["id"] not in {q["id"] for q in ranked}]
-        for station in order:
-            dated = station["observed_at"] is not None
-            st.write("**" + station["name"] + "** · " + (f"${station['price']:.3f}/gal" if dated else "Unconfirmed"))
-            stamp = station["observed_at"].strftime("%b %d %I:%M %p %Z") if dated else "No verified timestamp"
-            st.caption(f"{station['address']} · {station['source']} · {stamp}" +
-                       (" · Membership required" if station["member"] else ""))
-            if station["url"]:
-                st.link_button("Check station listing", station["url"])
-        for note in fuel["notes"]:
-            st.caption(note)
-    with st.expander("🚗 Is cheaper gas worth a detour?"):
-        if len(ranked) < 2:
-            st.info("Enter checked prices for two or more stations to compare.")
-        else:
-            quotes = {x["id"]: x for x in ranked}
-            reference = st.selectbox("Reference station", list(quotes),
-                           format_func=lambda sid: quotes[sid]["name"], key="detour_reference")
-            alternate = st.selectbox("Alternate station", list(quotes), index=1,
-                           format_func=lambda sid: quotes[sid]["name"], key="detour_alternate")
-            gallons = st.number_input("Gallons to fill", min_value=1.0, max_value=30.0, value=15.0)
-            extra_miles = st.number_input("Extra round-trip miles", min_value=0.0, max_value=100.0, value=2.0, step=0.5)
-            comparison = fuel_detour_value(quotes[reference]["price"], quotes[alternate]["price"], gallons, extra_miles)
-            st.metric("Net fuel savings", f"${comparison['net_savings']:+.2f}")
-            st.caption(f"Pump savings ${comparison['pump_savings']:+.2f} minus detour fuel ${comparison['detour_fuel_cost']:.2f}. Excludes your time and vehicle wear.")
-
+        st.caption(f"Using your entered price of ${live_gas:.2f}/gal for the 16 MPG fuel calculation. Not automatically verified.")
     tab1, tab2 = st.tabs(["🗓️ Calendar & routing", "📊 Weekly profit"])
     with tab1:
         selected_date = st.date_input("Plan your driving date", datetime.now(TZ).date())
@@ -713,12 +473,10 @@ def main():
         st.subheader("Weekly Profit Grader")
         st.caption("Fuel-only operating contribution. Taxes, maintenance, insurance and depreciation are not deducted.")
         if live_gas is not None:
-            st.info(f"Planning fuel rate: ${live_gas:.3f}/gal — lowest recent dated report; for realized earnings, override with the price you actually paid.")
-        override = st.checkbox("Use my actual paid price" if live_gas else "Enter a verified pump price while live data is unavailable")
-        paid = st.number_input("Actual regular price ($/gal)", min_value=0.5, max_value=15.0,
-                               value=float(live_gas or 3.0), step=0.01, disabled=not override,
-                               help="Used only when the override box is selected. This is not a live quote.") if override else None
-        gas_price = paid if override else live_gas
+            st.info(f"Fuel rate: ${live_gas:.2f}/gal — entered above, not automatically fetched.")
+        else:
+            st.warning("The grader needs a gas price. Check GasBuddy and enter it in the gas section above.")
+        gas_price = live_gas
         with st.form("grader_form"):
             gross = st.number_input("Gross earnings ($)", min_value=0.0, value=340.90)
             hours = st.number_input("Total online hours", min_value=0.0, value=10.1)
