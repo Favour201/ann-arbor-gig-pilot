@@ -23,6 +23,8 @@ from bs4 import BeautifulSoup
 from icalendar import Calendar
 import recurring_ical_events
 import streamlit as st
+import hmac
+import pilot_features as pilot
 
 MPG = 16.0
 TZ = ZoneInfo("America/New_York")
@@ -887,6 +889,55 @@ def partition_events(events):
     return major, local
 
 
+def render_calendar_export(drive_plan, day):
+    """Explicitly selected real shift windows: Google links and portable ICS."""
+    with st.expander("📅 Add planned shifts to calendar", expanded=False):
+        st.caption("These are personal plans, not calendar sync or confirmed paid jobs. "
+                   "Calendar entries are added only after you approve them.")
+        rest = st.checkbox("Include rest / reset window", value=False,
+                           key="calendar_include_rest")
+        indices = [i for i, slot in enumerate(drive_plan)
+                   if slot.get("start_minute") is not None
+                   and (slot["app"] in pilot.DRIVING_CATEGORIES or
+                        (rest and slot["app"] == "Break / Reset"))]
+        if not indices:
+            st.info("No dated driving windows to export. An unknown kickoff does not generate a calendar time.")
+            return
+        picked = st.multiselect("Choose the planned windows to export",
+                                options=indices, default=[],
+                                format_func=lambda i: f"{roadmap_title(drive_plan[i])} · {drive_plan[i]['time']}",
+                                key=f"calendar_selected_{day.isoformat()}")
+        if not picked:
+            st.caption("Select the shifts you actually intend to drive. Rest breaks are optional.")
+            return
+        if any("onward" in drive_plan[i]["time"].lower() for i in picked):
+            onward_hours = st.select_slider(
+                "Calendar duration for 'onward' shifts",
+                options=[1, 2, 3, 4, 5], value=2,
+                help="This is your selected reservation length, NOT a known end time.")
+        else:
+            onward_hours = 2
+        entries = pilot.selected_calendar_entries(drive_plan, day,
+                                                   selected=picked,
+                                                   onward_hours=onward_hours,
+                                                   include_break=rest)
+        if not entries:
+            st.warning("No confirmed clock windows selected.")
+            return
+        st.download_button(
+            "Download selected shifts (.ics) · Apple / Outlook",
+            data=pilot.calendar_ics(entries),
+            file_name=f"ogbuefi-driving-{day.isoformat()}.ics",
+            mime="text/calendar", use_container_width=True,
+        )
+        st.caption("Google Calendar opens a prefilled event for each shift; save it there "
+                   "to add it. Existing events will not update automatically.")
+        for entry in entries:
+            st.link_button(f"Google Calendar · {entry['title']} "
+                           f"({entry['start'].strftime('%I:%M %p').lstrip('0')}) ↗",
+                           pilot.calendar_google_link(entry), use_container_width=True)
+
+
 def render_driving_card(slot, step):
     """Compact timeline row; all routing instructions remain available on tap."""
     with st.container(border=True):
@@ -955,6 +1006,11 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
         render_driving_card(slot, i)
     if not shown:
         st.info("No windows match. Turn off Hide finished windows to view the full plan.")
+
+    render_calendar_export(drive_plan, selected_date)
+    if st.session_state.get("driver_authenticated"):
+        brief = pilot.daily_history_brief(load_private_history(), selected_date)
+        st.caption("Your driving history: " + brief["message"])
 
     critical = [ev for ev in major if ev["tier"] == "CRITICAL IMPACT"]
     if critical:
