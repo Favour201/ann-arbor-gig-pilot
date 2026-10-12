@@ -609,7 +609,7 @@ def game_day_blocks(event, base_camp, *, stop_buffer_minutes=45, return_after_ho
     return_at = max(kickoff + timedelta(hours=return_after_hours),
                     local_dt(datetime.combine(kickoff.date(), time(15))))
     midnight = local_dt(datetime.combine(kickoff.date() + timedelta(days=1), time.min))
-    return_end = min(return_at + timedelta(hours=3), midnight)
+    return_end = midnight  # "onward" stays relevant until the selected day ends.
     if pre_end <= pre_start:
         raise ValueError("Pregame window must be positive")
     def minute(dt):
