@@ -24,6 +24,7 @@ from icalendar import Calendar
 import recurring_ical_events
 import streamlit as st
 import hmac
+import statistics
 import pilot_features as pilot
 
 MPG = 16.0
@@ -1238,7 +1239,7 @@ def render_shift_history():
                 with right:
                     st.metric("Median after fuel / online hour",
                               "${:,.2f}".format(
-                                  sorted(m["after_fuel_hour"] for m in valid)[len(valid)//2]))
+                                  statistics.median(m["after_fuel_hour"] for m in valid)))
             with st.expander("Review shift rows"):
                 st.dataframe(rows, hide_index=True, use_container_width=True)
         else:
