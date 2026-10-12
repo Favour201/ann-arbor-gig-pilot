@@ -40,7 +40,7 @@ STATIONS = [
      "url": "https://www.oilmonster.com/gas-station/bp/ann-arbor/3031-washtenaw-ave/9836"},
     {"id": "sams_carpenter", "name": "Sam's Club", "address": "5450 Carpenter Rd", "member": True, "url": ""},
     {"id": "costco_airport", "name": "Costco", "address": "771 Airport Blvd", "member": True,
-     "url": "https://www.oilmonster.com/gas-station/costco-wholesale/ann-arbor/771-airport-blvd/7135"},
+     "url": ""},
     {"id": "bp_east", "name": "BP", "address": "4975 Washtenaw Ave", "member": False,
      "url": "https://www.oilmonster.com/gas-station/bp/ann-arbor/4975-washtenaw-ave/9839"},
     {"id": "marathon_washtenaw", "name": "Marathon", "address": "3555 Washtenaw Ave", "member": False,
@@ -178,13 +178,8 @@ def fetch_live_fuel(feed_url="", radius=10, _token=""):
         result = {**station, "price": None, "observed_at": None, "status": "Feed connection needed"}
         if station["id"] in quotes:
             return {**result, **quotes[station["id"]], "source": "Configured fuel provider"}
-        if station["url"]:
-            try:
-                result["price"] = parse_public_fuel(get(station["url"]).text)
-                result["status"] = "Report time unknown" if result["price"] else "No regular quote"
-            except (requests.RequestException, ValueError):
-                result["status"] = "Source unavailable"
-        return {**result, "source": "Public station listing"}
+        result["status"] = "No timestamped price • check station directly"
+        return {**result, "source": "Station reference (not a price feed)"}
 
     # BP is first in the lookup matrix; ranking still uses actual price.
     with ThreadPoolExecutor(max_workers=5) as pool:
@@ -198,6 +193,76 @@ def current_quotes(fuel, now=None):
     return sorted([s for s in fuel["stations"] if s.get("observed_at") is not None
                    and timedelta(minutes=-5) <= now - s["observed_at"] <= FUEL_MAX_AGE],
                   key=lambda s: (s["price"], s["id"] != "bp_washtenaw"))
+
+
+
+FUEL_LOG_KEY = "washtenaw_gig_prices_v1"
+
+
+def validated_driver_history(raw, now=None):
+    """Validate driver-entered records; retain at most 30 days for historical display."""
+    now = now or datetime.now(TZ)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    latest = {}
+    for row in raw[:100]:
+        try:
+            if not isinstance(row, dict):
+                continue
+            station = next((s for s in STATIONS if s["id"] == row["station_id"]), None)
+            if station is None:
+                continue
+            stamp = datetime.fromisoformat(str(row["observed_at"]).replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                continue
+            stamp = stamp.astimezone(TZ)
+            if not timedelta(minutes=-5) <= now - stamp <= timedelta(days=30):
+                continue
+            quote = {"station_id": station["id"], "regular": price_number(row["regular"]),
+                     "observed_at": stamp.isoformat(), "paid": row.get("paid") is True}
+            if station["id"] not in latest or stamp > local_dt(latest[station["id"]]["observed_at"]):
+                latest[station["id"]] = quote
+        except (KeyError, ValueError, TypeError, OverflowError):
+            continue
+    return sorted(latest.values(), key=lambda q: q["observed_at"], reverse=True)
+
+
+def merge_driver_reports(fuel, history, now=None):
+    """Only <=24h old entries affect planning; preserve newer timestamped provider quotes."""
+    now = now or datetime.now(TZ)
+    stations = [dict(s) for s in fuel["stations"]]
+    by_id = {s["id"]: s for s in stations}
+    for row in validated_driver_history(history, now):
+        stamp = local_dt(row["observed_at"])
+        if now - stamp > FUEL_MAX_AGE:
+            continue
+        quote = by_id.get(row["station_id"])
+        if quote is None:
+            continue
+        if quote.get("observed_at") is None or stamp > quote["observed_at"]:
+            quote.update(price=row["regular"], observed_at=stamp,
+                         source="Driver-entered • unverified",
+                         status="Saved on this browser")
+    return {**fuel, "stations": stations}
+
+
+def fuel_detour_value(reference_price, alternate_price, gallons, extra_round_trip_miles):
+    """Net pump-price saving after additional 16 MPG detour fuel."""
+    reference_price = price_number(reference_price)
+    alternate_price = price_number(alternate_price)
+    if not (math.isfinite(gallons) and gallons > 0
+            and math.isfinite(extra_round_trip_miles) and extra_round_trip_miles >= 0):
+        raise ValueError("Refill and detour mileage must be valid")
+    pump_savings = gallons * (reference_price - alternate_price)
+    detour_fuel_cost = extra_round_trip_miles / MPG * alternate_price
+    return {"pump_savings": round(pump_savings, 2),
+            "detour_fuel_cost": round(detour_fuel_cost, 2),
+            "net_savings": round(pump_savings - detour_fuel_cost, 2)}
 
 
 def classify(venue, name=""):
