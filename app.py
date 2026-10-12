@@ -23,6 +23,9 @@ from bs4 import BeautifulSoup
 from icalendar import Calendar
 import recurring_ical_events
 import streamlit as st
+import hmac
+import statistics
+import pilot_features as pilot
 
 MPG = 16.0
 TZ = ZoneInfo("America/New_York")
@@ -887,6 +890,55 @@ def partition_events(events):
     return major, local
 
 
+def render_calendar_export(drive_plan, day):
+    """Explicitly selected real shift windows: Google links and portable ICS."""
+    with st.expander("📅 Add planned shifts to calendar", expanded=False):
+        st.caption("These are personal plans, not calendar sync or confirmed paid jobs. "
+                   "Calendar entries are added only after you approve them.")
+        rest = st.checkbox("Include rest / reset window", value=False,
+                           key="calendar_include_rest")
+        indices = [i for i, slot in enumerate(drive_plan)
+                   if slot.get("start_minute") is not None
+                   and (slot["app"] in pilot.DRIVING_CATEGORIES or
+                        (rest and slot["app"] == "Break / Reset"))]
+        if not indices:
+            st.info("No dated driving windows to export. An unknown kickoff does not generate a calendar time.")
+            return
+        picked = st.multiselect("Choose the planned windows to export",
+                                options=indices, default=[],
+                                format_func=lambda i: f"{roadmap_title(drive_plan[i])} · {drive_plan[i]['time']}",
+                                key=f"calendar_selected_{day.isoformat()}")
+        if not picked:
+            st.caption("Select the shifts you actually intend to drive. Rest breaks are optional.")
+            return
+        if any("onward" in drive_plan[i]["time"].lower() for i in picked):
+            onward_hours = st.select_slider(
+                "Calendar duration for 'onward' shifts",
+                options=[1, 2, 3, 4, 5], value=2,
+                help="This is your selected reservation length, NOT a known end time.")
+        else:
+            onward_hours = 2
+        entries = pilot.selected_calendar_entries(drive_plan, day,
+                                                   selected=picked,
+                                                   onward_hours=onward_hours,
+                                                   include_break=rest)
+        if not entries:
+            st.warning("No confirmed clock windows selected.")
+            return
+        st.download_button(
+            "Download selected shifts (.ics) · Apple / Outlook",
+            data=pilot.calendar_ics(entries),
+            file_name=f"ogbuefi-driving-{day.isoformat()}.ics",
+            mime="text/calendar", use_container_width=True,
+        )
+        st.caption("Google Calendar opens a prefilled event for each shift; save it there "
+                   "to add it. Existing events will not update automatically.")
+        for entry in entries:
+            st.link_button(f"Google Calendar · {entry['title']} "
+                           f"({entry['start'].strftime('%I:%M %p').lstrip('0')}) ↗",
+                           pilot.calendar_google_link(entry), use_container_width=True)
+
+
 def render_driving_card(slot, step):
     """Compact timeline row; all routing instructions remain available on tap."""
     with st.container(border=True):
@@ -956,6 +1008,20 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
     if not shown:
         st.info("No windows match. Turn off Hide finished windows to view the full plan.")
 
+    render_calendar_export(drive_plan, selected_date)
+    history_rows = load_private_history() if st.session_state.get("driver_authenticated") else []
+    daily_brief = pilot.daily_decision_brief(selected_date, events_data, weather, history_rows)
+    with st.expander("Your daily decision brief", expanded=False):
+        st.write("**Events & congestion:** " + daily_brief["events"])
+        st.write("**Forecast:** " + daily_brief["weather"])
+        if st.session_state.get("driver_authenticated"):
+            st.write("**Your results:** " + daily_brief["history"]["message"])
+        else:
+            st.caption("Personalized benchmarks unlock after logging shifts and "
+                       "accessing your private history in Earnings & Fuel.")
+        st.caption("These are planning clues. Check live driving-app offers and "
+                   "traffic before accepting work.")
+
     critical = [ev for ev in major if ev["tier"] == "CRITICAL IMPACT"]
     if critical:
         st.caption(f"⚠ {len(critical)} major stadium event(s) may affect traffic. "
@@ -1019,6 +1085,207 @@ def render_events_workspace(selected_date, events_data, weather):
                    "TBD kickoff times update on a successful feed refresh.")
 
 
+def private_sheet_config():
+    """No credentials are shipped in GitHub or shown in the dashboard."""
+    sheet_id = setting("SHIFT_SHEET_ID", "").strip()
+    credentials = None
+    try:
+        credentials = st.secrets.get("gcp_service_account")
+    except (FileNotFoundError, st.errors.StreamlitSecretNotFoundError):
+        pass
+    if credentials is None:
+        encoded = setting("GCP_SERVICE_ACCOUNT_JSON", "")
+        if encoded:
+            try:
+                credentials = json.loads(encoded)
+            except (ValueError, TypeError):
+                credentials = None
+    return sheet_id, dict(credentials) if credentials is not None else None
+
+
+def load_private_history():
+    """Only an authenticated session may read the optional private Google Sheet."""
+    if not st.session_state.get("driver_authenticated"):
+        return []
+    if "sheet_shift_rows" not in st.session_state:
+        sheet_id, credentials = private_sheet_config()
+        if sheet_id and credentials:
+            try:
+                st.session_state["sheet_shift_rows"] = pilot.sheet_load(credentials, sheet_id)
+                st.session_state.pop("sheet_history_error", None)
+            except Exception:
+                st.session_state["sheet_shift_rows"] = []
+                st.session_state["sheet_history_error"] = (
+                    "Google Sheets could not be read. Shift entries can be backed up "
+                    "as CSV until the configuration is repaired.")
+        else:
+            st.session_state["sheet_shift_rows"] = []
+    return pilot.merge_shift_rows(st.session_state["sheet_shift_rows"],
+                                   st.session_state.get("unsynced_shift_rows", []))
+
+
+def private_history_unlocked():
+    """Protect personal financial data on a publicly reachable Streamlit app."""
+    configured = setting("DRIVER_ACCESS_PASSWORD", "")
+    if len(configured) < 12:
+        st.info("Private shift history is locked until DRIVER_ACCESS_PASSWORD "
+                "(12+ characters) is set in Streamlit app secrets. "
+                "No financial history is exposed or saved to the cloud without it.")
+        return False
+    if st.session_state.get("driver_authenticated"):
+        return True
+    attempts = st.session_state.get("driver_login_failures", 0)
+    if attempts >= 5:
+        st.error("Too many attempts in this session. Close this session and retry. "
+                 "For stronger security, make the Streamlit app private and use identity login.")
+        return False
+    with st.form("driver_unlock"):
+        password = st.text_input("Driver access passphrase", type="password",
+                                 help="Only the owner should unlock private earnings history.")
+        submitted = st.form_submit_button("Unlock private history")
+    if submitted:
+        if hmac.compare_digest(password.encode(), configured.encode()):
+            st.session_state["driver_authenticated"] = True
+            st.session_state["driver_login_failures"] = 0
+            st.rerun()
+        else:
+            st.session_state["driver_login_failures"] = attempts + 1
+            st.error("Passphrase not recognized.")
+    return False
+
+
+def render_shift_history():
+    """Private history stays inside Earnings & Fuel and requires configured access."""
+    with st.expander("🔒 Shift history & insights", expanded=False):
+        if not private_history_unlocked():
+            return
+        sheet_id, credentials = private_sheet_config()
+        connected = bool(sheet_id and credentials)
+        rows = load_private_history()
+        if st.session_state.get("sheet_history_error"):
+            st.warning(st.session_state["sheet_history_error"])
+        if connected:
+            st.caption("Private Google Sheets storage configured. "
+                       "Refresh the page to reload changes made outside this app.")
+        else:
+            st.warning("Google Sheets is not connected yet. Any shifts logged here "
+                       "are TEMPORARY until you download the CSV backup. "
+                       "See README for the one-time service-account setup.")
+
+        st.markdown("**Log a completed shift**")
+        with st.form("log_completed_shift"):
+            logged_date = st.date_input("Date worked", datetime.now(TZ).date(), key="log_date")
+            platform = st.selectbox("Driving platform", ["Multi-app", "Uber", "Lyft",
+                                                         "DoorDash", "Grubhub", "Other"])
+            area = st.selectbox("Main driving area", ["Ann Arbor", "Ypsilanti",
+                                                      "Washtenaw corridor", "Other"])
+            window = st.selectbox("Time window", ["Dinner", "Game pregame", "Game evening",
+                                                   "Afternoon", "Late night", "Lunch",
+                                                   "Morning", "Mixed"])
+            gross = st.number_input("Shift gross earnings ($)", min_value=0.0,
+                                    value=0.0, step=5.0)
+            hours = st.number_input("Online hours, including idle time", min_value=0.25,
+                                    value=2.0, step=0.25)
+            miles = st.number_input("Total driven miles, including unpaid miles",
+                                    min_value=0.1, value=25.0, step=1.0)
+            gas_rate = st.number_input("Regular gas price for this shift ($/gal)",
+                                       min_value=0.0, max_value=15.0,
+                                       value=float(st.session_state.get("checked_gas_price", 0.0)),
+                                       step=0.05)
+            optional_cost = st.number_input(
+                "Optional other variable vehicle cost ($/mile)", min_value=0.0,
+                max_value=10.0, value=0.0, step=0.01,
+                help="Leave zero if unknown. This is not a full tax or depreciation calculation.")
+            note = st.text_input("Notes (optional)", max_chars=300)
+            submitted = st.form_submit_button("Save completed shift", use_container_width=True)
+        if submitted:
+            try:
+                shift = pilot.new_shift(logged_date, platform, area, window, gross,
+                                        hours, miles, gas_rate, optional_cost, note)
+                if connected:
+                    try:
+                        pilot.sheet_append(credentials, sheet_id, shift)
+                    except Exception:
+                        st.session_state.setdefault("unsynced_shift_rows", []).append(shift)
+                        st.warning("Could not save to Google Sheets. The shift is held in this "
+                                   "session only. Download your CSV backup below.")
+                    else:
+                        st.session_state.setdefault("sheet_shift_rows", []).append(shift)
+                        st.success("Shift saved to your private Google Sheet.")
+                else:
+                    st.session_state.setdefault("unsynced_shift_rows", []).append(shift)
+                    st.warning("Shift recorded temporarily. Download your CSV backup "
+                               "before closing the session.")
+                rows = load_private_history()
+            except (ValueError, TypeError):
+                st.error("Check your gas price and shift values; valid earnings, hours "
+                         "and all driven miles are required.")
+
+        if rows:
+            st.markdown("**Historical performance**")
+            valid = []
+            for row in rows:
+                try:
+                    valid.append(pilot.shift_metrics(row))
+                except (ValueError, KeyError, TypeError, ZeroDivisionError):
+                    pass
+            st.caption(f"{len(rows)} saved / session-only records · "
+                       "Benchmarks compare actual recorded shifts, not surge predictions.")
+            if valid:
+                left, right = st.columns(2, gap="small")
+                with left:
+                    st.metric("Recorded after-fuel earnings",
+                              "${:,.2f}".format(sum(m["after_fuel"] for m in valid)))
+                with right:
+                    st.metric("Median after fuel / online hour",
+                              "${:,.2f}".format(
+                                  statistics.median(m["after_fuel_hour"] for m in valid)))
+            with st.expander("Review shift rows"):
+                st.dataframe(rows, hide_index=True, use_container_width=True)
+        else:
+            st.caption("No shifts logged yet. Three or more matching weekdays "
+                       "within 90 days unlock a descriptive historical benchmark.")
+
+        st.download_button("Download private shift-history backup (CSV)",
+                           data=pilot.csv_backup(rows), file_name="ogbuefi-shifts.csv",
+                           mime="text/csv", use_container_width=True)
+        file = st.file_uploader("Restore shift-history CSV (session preview)",
+                                type=["csv"], key="restore_csv",
+                                help="Restoring does not silently upload rows to Google Sheets.")
+        if file is not None and st.button("Restore CSV to this session"):
+            try:
+                recovered = pilot.csv_restore(file.getvalue())
+                existing_ids = {str(x.get("id")) for x in rows}
+                missing = [x for x in recovered if str(x.get("id")) not in existing_ids]
+                st.session_state.setdefault("unsynced_shift_rows", []).extend(missing)
+                st.success(f"Restored {len(missing)} new rows to temporary session history. "
+                           "Download an updated backup or sync explicitly.")
+            except (UnicodeError, ValueError, KeyError, TypeError):
+                st.error("Not a valid Gig Pilot history CSV.")
+        unsynced = st.session_state.get("unsynced_shift_rows", [])
+        if connected and unsynced and st.button("Sync unsaved CSV/session shifts to Google Sheets"):
+            synced = []
+            already_saved = {str(x["id"]) for x in
+                             st.session_state.get("sheet_shift_rows", [])}
+            for row in unsynced:
+                if str(row.get("id")) in already_saved:
+                    synced.append(row["id"])
+                    continue
+                try:
+                    pilot.sheet_append(credentials, sheet_id, row)
+                except Exception:
+                    break
+                else:
+                    synced.append(row["id"])
+                    st.session_state.setdefault("sheet_shift_rows", []).append(row)
+            st.session_state["unsynced_shift_rows"] = [
+                row for row in unsynced if row["id"] not in synced]
+            if st.session_state["unsynced_shift_rows"]:
+                st.warning("Some entries could not sync. Keep a CSV backup.")
+            else:
+                st.success("All unsaved entries synced to the private Sheet.")
+
+
 def render_earnings_workspace():
     """Fuel entry and weekly grading, without loading event/weather feeds."""
     st.subheader("Earnings & Fuel")
@@ -1068,6 +1335,8 @@ def render_earnings_workspace():
             st.caption("Fuel-only contribution; taxes, maintenance, depreciation and insurance excluded.")
         else:
             st.warning("Enter positive hours and miles and a checked fuel price.")
+
+    render_shift_history()
 
 
 def main():
