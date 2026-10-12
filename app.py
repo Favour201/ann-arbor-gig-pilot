@@ -87,7 +87,7 @@ def overlaps(start, end, day):
 def classify(venue, name=""):
     venue = venue.lower()
     if "michigan stadium" in venue:
-        return "CRITICAL IMPACT" if "football" in name.lower() else "INDOOR ARENA" if "arena" in venue else "NEIGHBORHOOD / SCHOOL"
+        return "CRITICAL IMPACT" if any(k in name.lower() for k in ("football", "kickoff")) else "NEIGHBORHOOD / SCHOOL"
     if any(x in venue for x in ("rynearson", "george gervin", "convocation", "bowen", "eastern michigan")):
         return "YPSI GAME DAY"
     if any(x in venue for x in ("crisler", "yost")):
