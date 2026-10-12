@@ -870,6 +870,16 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 WORKSPACES = ("Drive", "Events & Traffic", "Earnings & Fuel")
 
 
+def remember_driving_date():
+    """Widget keys disappear when a workspace is hidden; keep a nonwidget value."""
+    st.session_state["planned_date"] = st.session_state["selected_day"]
+
+
+def remember_gas_price():
+    """Preserve a manually checked price across workspace changes in this session."""
+    st.session_state["checked_gas_price"] = st.session_state["checked_gas_price_input"]
+
+
 def partition_events(events):
     """Separate large venues from school/neighborhood congestion cues."""
     major = [ev for ev in events if ev["tier"] != "NEIGHBORHOOD / SCHOOL"]
@@ -923,19 +933,18 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
     drive_plan = filter_roadmap(schedule, "Driving")
     next_step = next_planning_window(drive_plan, selected_date, now)
 
-    with st.container(border=True):
-        st.caption("UP NEXT" if selected_date >= now.date() else "PAST DATE")
-        if next_step:
-            st.markdown(f"**{roadmap_title(next_step)}**")
-            st.markdown(f'<span class="pilot-timeline-time">{escape(next_step["time"])}</span>',
-                        unsafe_allow_html=True)
-        elif selected_date < now.date():
-            st.caption("Choose today or a future date for upcoming recommendations.")
-        else:
-            st.caption("No more timed driving windows today. Check the other workspace before going out.")
-        if home_game and smart_game_day:
-            st.caption(f"Michigan kickoff: {clock(home_game['start'])}. "
-                       "The recommendation updates when the official time changes.")
+    if selected_date == now.date():
+        with st.container(border=True):
+            st.caption("CURRENT / NEXT STEP")
+            if next_step:
+                st.markdown(f"**{roadmap_title(next_step)}**")
+                st.markdown(f'<span class="pilot-timeline-time">{escape(next_step["time"])}</span>',
+                            unsafe_allow_html=True)
+            else:
+                st.caption("No timed driving windows remain today.")
+    if home_game and smart_game_day:
+        st.caption(f"Michigan kickoff: {clock(home_game['start'])}. "
+                   "The split shift adapts when the official game time changes.")
 
     st.markdown('<div class="pilot-section-head">Recommended windows</div>', unsafe_allow_html=True)
     remaining = st.toggle("Hide finished windows", value=False, key="drive_remaining",
@@ -954,8 +963,6 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
     elif major or local:
         st.caption(f"{len(major)} major · {len(local)} local published events. "
                    "See Events & Traffic for congestion details.")
-    if any(not row["Status"].startswith("Checked") for row in events_data["coverage"]):
-        st.caption("Some event sources could not be verified; coverage may be incomplete.")
     st.button("Review events & traffic →", use_container_width=True,
               on_click=lambda: st.session_state.update(pilot_workspace="Events & Traffic"))
 
@@ -1024,7 +1031,9 @@ def render_earnings_workspace():
         with b:
             st.link_button("GasBuddy · Ypsilanti ↗", GASBUDDY_YPSILANTI_URL, use_container_width=True)
         st.number_input("Gas price you checked ($/gal)", min_value=0.0, max_value=15.0,
-                        value=0.0, step=0.01, key="checked_gas_price",
+                        value=st.session_state.get("checked_gas_price", 0.0),
+                        step=0.01, key="checked_gas_price_input",
+                        on_change=remember_gas_price,
                         help="Enter a checked regular-gas price. 0 means unavailable; stored in this session.")
         st.caption("Community-reported prices may be wrong. Check the time, grade and membership conditions.")
 
@@ -1090,7 +1099,9 @@ def main():
 
     date_col, refresh_col = st.columns([3, 1], gap="small", vertical_alignment="bottom")
     with date_col:
-        selected_date = st.date_input("Driving date", now.date(), key="selected_day")
+        selected_date = st.date_input(
+            "Driving date", st.session_state.get("planned_date", now.date()),
+            key="selected_day", on_change=remember_driving_date)
     with refresh_col:
         if st.button("↻ Refresh", use_container_width=True, help="Recheck event and weather feeds"):
             fetch_live_events.clear()
