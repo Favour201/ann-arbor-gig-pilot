@@ -749,7 +749,8 @@ def filter_roadmap(slots, view="All", *, selected_date=None, now=None, remaining
     if view not in ROADMAP_VIEWS:
         raise ValueError("Unknown roadmap filter")
     if view == "Driving":
-        filtered = [slot for slot in slots if slot["app"] in ("Delivery", "XL / Comfort")]
+        filtered = [slot for slot in slots if slot["app"] in
+                    ("Delivery", "XL / Comfort", "Pregame drive", "Rest / reset", "Evening return")]
     elif view == "Traffic & events":
         filtered = [slot for slot in slots if slot["app"] not in ("Delivery", "XL / Comfort")]
     else:
@@ -777,6 +778,8 @@ def next_planning_window(slots, selected_date, now):
 
 def roadmap_title(slot):
     """Compact headline, leaving full routing guidance in an expander."""
+    if slot["app"] in ("Pregame drive", "Rest / reset", "Evening return"):
+        return slot["app"]
     if slot["app"] == "Delivery":
         return "Delivery window"
     if slot["app"] == "XL / Comfort":
@@ -788,9 +791,13 @@ MIDNIGHT_CSS = """
 <style>
 :root {color-scheme:dark;}
 html,body,[data-testid="stAppViewContainer"],.stApp {background:#101113 !important;color:#F1F0ED !important;}
-[data-testid="stHeader"] {background:rgba(17,27,42,.94) !important;}
+/* Full-width dashboard hero: built-in toolbar obscured our content on phones.
+   All pilot controls are in-page; external developer management remains in Streamlit Cloud. */
+[data-testid="stHeader"], [data-testid="stToolbar"] {
+  display:none !important; height:0 !important; min-height:0 !important;
+}
 [data-testid="stSidebar"] {background:#17181A !important;}
-.block-container {max-width:960px !important;padding-top:1.25rem !important;padding-bottom:3rem !important;}
+.block-container {max-width:960px !important;padding-top:.65rem !important;padding-bottom:3rem !important;}
 h1,h2,h3 {color:#FAF9F6 !important;letter-spacing:-.02em;}
 h2 {font-size:1.33rem !important;}
 [data-testid="stCaptionContainer"],small {color:#BCBAB5 !important;}
@@ -865,8 +872,7 @@ def main():
         unsafe_allow_html=True,
     )
 
-    with st.sidebar:
-        st.header("⚙️ Pilot settings")
+    with st.expander("⚙️ Pilot settings", expanded=False):
         base = st.text_input("Base camp", BASE)
         st.caption("Changing base camp updates routing advice; event coverage stays focused on Ann Arbor / Ypsilanti.")
         st.caption("Weather: 15-minute cache · Events: 30-minute cache.")
@@ -931,14 +937,28 @@ def main():
         st.caption(selected_date.strftime("%A, %B %d, %Y") +
                    " · Chronological windows · Filters are optional")
         render_weather(weather)
+        game_on_saturday = next(
+            (e for e in events if is_confirmed_michigan_home_football(e)
+             and e["start"].weekday() == 5 and selected_date.weekday() == 5), None)
         with st.expander("⚙️ Roadmap filters", expanded=False):
             include_events = st.checkbox("Include major-event demand + traffic cues", value=True,
                                          help="Events do not guarantee profitable rides or delivery requests.")
             include_local = st.checkbox("Show school / neighborhood traffic advisories", value=True,
                                         help="Traffic avoidance cues independent of major-event targeting.")
-
+            pregame_buffer = 60
+            if game_on_saturday is not None and include_events:
+                pregame_buffer = st.selectbox(
+                    "Finish pregame shift",
+                    options=[60, 30],
+                    format_func=lambda m: f"{m} minutes before kickoff",
+                    help="60 min is the relaxed default; 30 min allows more driving if worthwhile.",
+                    key="pregame_buffer")
         schedule = generate_schedule(events, base, selected_date.weekday(),
-                                     include_event_cues=include_events, include_local=include_local)
+                                     include_event_cues=include_events, include_local=include_local,
+                                     pregame_buffer_minutes=pregame_buffer)
+        if game_on_saturday and include_events:
+            st.caption("Suggested Saturday split shift • pregame driving → optional home rest → "
+                       "return about two hours after kickoff only if current earnings justify it.")
         upcoming = next_planning_window(schedule, selected_date, now)
         with st.container(border=True):
             st.caption("CURRENT / NEXT LISTED WINDOW" if selected_date == now.date()
