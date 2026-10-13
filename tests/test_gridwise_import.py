@@ -56,7 +56,7 @@ def test_gridwise_csv_detection_and_strict_validation():
     assert parsed["rows"][0]["platform"] == "Uber Eats"
     assert parsed["rows"][1]["earnings"] == "5.00"
     m = gridwise.parse_gridwise_csv(
-        b"Date,Hours,Miles,Rate,Deduction\nJune 1, 2022,3.5,42.5,62.5\xc2\xa2,$26.56\n")
+        b'Date,Hours,Miles,Rate,Deduction\n"June 1, 2022",3.5,42.5,62.5\xc2\xa2,$26.56\n')
     assert m["type"] == "mileage"
     assert m["rows"][0]["deduction_rate"] == "62.5"
     with pytest.raises(ValueError):
