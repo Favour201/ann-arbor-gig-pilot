@@ -1634,10 +1634,9 @@ def render_results_workspace():
             history_weather = {"places": [{"status": "Unknown"}],
                                "hazards": []}
             history_events = {"events": []}
-            with st.expander("Positioning and hypothetical offer tools"):
-                render_predeparture_check(
-                    st.session_state["review_date"], datetime.now(TZ),
-                    history_weather, history_events)
+            render_predeparture_check(
+                st.session_state["review_date"], datetime.now(TZ),
+                history_weather, history_events)
             render_decision_journal(
                 st.session_state["review_date"], st.session_state["review_plan"],
                 {"events": snapshot.get("events", ""),
@@ -1645,7 +1644,8 @@ def render_results_workspace():
         else:
             st.caption("Visit Drive first to load a plan before reviewing "
                        "or journaling a specific recommendation.")
-        with st.expander("Legacy fuel and earnings tools"):
+        if st.toggle("Legacy fuel and earnings tools", value=False,
+                     key="legacy_fuel_tools"):
             render_earnings_workspace()
 
 
