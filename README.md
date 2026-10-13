@@ -11,36 +11,56 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Driving decision check and private outcome journal (no Gridwise duplication)
+## What to open and when (focused three-workspace pilot)
 
-On **Drive**, open **Before you leave · decision check**. Supply an *actual checked*
-regular-gas price (not GasBuddy's guessed price), your estimated **one-way**
-positioning miles, your maximum speculative positioning-fuel spend and how many
-hours you can drive. A simple 16 MPG round-trip repositioning estimate compares
-the fuel cost against **your** threshold. It NEVER claims actual app demand,
-live surge, traffic travel times, road closures or predicted earnings. Weather
-cautions prompt an independent safety check. If an app presents a **real offer**,
-use the optional offer calculator to compare entered payout, **all** miles
-including unpaid mileage and total minutes against your personal after-fuel
-hourly minimum. Scenario inputs are not logged as tax or earnings data.
+**Drive is for a 30-second decision BEFORE you start driving.** It shows one
+next planned window, a short event/weather/traffic caution, other chronological
+windows and the original working calendar export. Existing verified Michigan
+game-day drive → rest → return logic and timing sliders are unchanged. No live
+offer input or private journal appears on the landing screen. This is *not* a
+live Uber/Lyft offer scanner and never promises demand, surge or profit.
 
-Open **Private decision journal · learn from your plans** to save which actual
-time window you considered, whether you chose **Drive / Monitor / Skip**, and
-your reason. It captures the current event/weather brief, selected plan time
-and optional positioning fuel assumption as a snapshot. After the shift, review
-that decision as **Worth it / Mixed / Not worth it / Skipped**, adding a takeaway.
-At least 3 reviewed plans are required before the app summarizes the number
-marked worthwhile. These are your subjective outcomes, not measured earnings
-improvements, statistical proof or demand forecasts.
+**Events & Traffic** retains the official calendar feeds, venue/school
+congestion context, detailed NWS forecasts and the collapsed diagnostics.
 
-The journal uses the *existing private spreadsheet* as a separate **Decisions**
-worksheet (created automatically on first owner-authenticated visit) and does
-not modify the older **Shifts** tab. The existing Streamlit driver passphrase
-must be configured and unlocked. When Sheets is unavailable, new plan entries
-remain **temporary in this browser session** and a CSV backup is offered.
-No Gridwise password or undocumented API endpoint is needed. Gridwise Plus
-remains authoritative for actual earnings, mileage and tax reports; its report
-CSV import is a future optional feature, not a prerequisite.
+**Results & Learning** complements Gridwise Plus, which remains the source
+of truth for actual earnings, mileage and taxes. On Results you can optionally
+import Gridwise reports. Expand *Advanced tools* only if you specifically need
+the previous predeparture calculator, decision journal, weekly grader, checked
+fuel-price form or legacy manual shift log. The legacy tools and original
+private **Shifts**/**Decisions** worksheet schemas remain intact and are not
+deleted or migrated automatically. Results doesn't fetch event/weather feeds;
+for journal planning windows, first visit Drive in that same session.
+
+### Gridwise PDF/CSV report import
+
+Open **Results & Learning → Import Gridwise reports · PDF or CSV** and unlock
+private access with your existing driver password. Select one or both supported
+Gridwise Earnings/Mileage PDFs or tabular CSVs. The app reads the uploaded files
+**in server memory** and displays a summary and first 25 structured rows. It
+requires explicit approval before appending normalized rows to a new,
+**separate private** Google Sheet tab named **Gridwise_Archive**. Duplicate
+natural rows in repeat imports are skipped. It does not store the original
+uploaded PDFs or alter your existing Shifts/Decisions tabs.
+
+The parser supports the column/row format of your **2022 sample PDFs** and
+simple date-based CSVs with recognizably named Date/Earnings or Date/Hours/Miles
+columns. Unsupported PDFs, scanned pictures, missing rows, invalid amounts,
+excessive file sizes or PDF totals that cannot be validated are rejected—not
+silently filled with guesses. Future Gridwise report format changes may require
+parser updates; no personal Gridwise API or automated account access is assumed.
+Multiple earnings-service rows on a date stay separate. When both reports are
+present, the overview counts matching dates without interpreting missing miles
+as zero or forcing trip-level matches. Tax deductions stay labeled as tax
+deductions, **never** direct fuel or economic expense.
+
+**Imported report rows are archive-only regardless of year**. Because the 2022
+records came from a different state, different vehicle and different gas-price
+environment, they are intentionally excluded from the 2026 Telluride model,
+live driving advice and current after-fuel benchmarks. Future comparison
+features can add explicit cohort and provenance selection after the operator
+verifies it. Never upload private reports to the public GitHub repository;
+use the password-protected Streamlit interface instead.
 
 ## Calendar exports (current planning date)
 
@@ -84,7 +104,7 @@ One-time setup:
    creates a Shifts tab with fixed headers upon first authenticated use. Save
    a completed shift to test your access.
 
-Under Earnings & Fuel → Shift history & insights, unlock the owner gate and
+Under Results & Learning → Advanced tools → Legacy fuel and earnings tools → Shift history & insights, unlock the owner gate and
 record actual gross pay, total online hours (including idle time), **all miles**
 (including unpaid mileage), checked regular gas price, platform, area and shift
 window. Optionally enter other variable vehicle costs per mile. The app
@@ -133,9 +153,9 @@ The top **Workspace** switch moves between:
   distinct interactive sections with event links and NWS detail. The full source
   status and timestamps are hidden inside **Advanced · Feed diagnostics**, only
   for troubleshooting, never on the Drive opening screen.
-- **Earnings & Fuel:** GasBuddy Ann Arbor/Ypsilanti links, manual checked regular
-  fuel price and Weekly Profit Grader at 16 MPG. This view deliberately does not
-  call the live event or weather feeds, making finance work simpler.
+- **Results & Learning:** Private Gridwise report import and optional Advanced tools for the
+  previous calculators, journal and historical shift form. This view does not
+  call event/weather feeds.
 
 Navigation uses native Streamlit state, not a new host or additional dependency.
 The selected driving date and fuel input survive normal in-app navigation within

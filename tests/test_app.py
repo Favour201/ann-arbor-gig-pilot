@@ -77,8 +77,11 @@ def test_offline_ui_and_grader():
         assert not at.number_input
         assert not any("Grade my week" == b.label for b in at.button)
         assert not at.dataframe  # Source coverage is not part of Drive.
-        at.segmented_control[0].set_value("Earnings & Fuel").run()
+        at.segmented_control[0].set_value("Results & Learning").run()
         assert not at.exception
+        assert not at.number_input  # Advanced forms are not built by default.
+        next(t for t in at.toggle if t.label == "Advanced tools · optional").set_value(True).run()
+        next(t for t in at.toggle if t.label == "Legacy fuel and earnings tools").set_value(True).run()
         assert next(b for b in at.button if b.label == "Grade my week").disabled
         next(n for n in at.number_input if n.label == "Gas price you checked ($/gal)").set_value(3.79).run()
         assert not next(b for b in at.button if b.label == "Grade my week").disabled
@@ -86,8 +89,10 @@ def test_offline_ui_and_grader():
         assert not at.exception
         assert any("After-fuel earnings" in x.value for x in at.success)
         at.segmented_control[0].set_value("Drive").run()
-        at.segmented_control[0].set_value("Earnings & Fuel").run()
+        at.segmented_control[0].set_value("Results & Learning").run()
         assert not at.exception
+        next(t for t in at.toggle if t.label == "Advanced tools · optional").set_value(True).run()
+        next(t for t in at.toggle if t.label == "Legacy fuel and earnings tools").set_value(True).run()
         gas = next(n for n in at.number_input if n.label == "Gas price you checked ($/gal)")
         assert gas.value == 3.79  # Price remains after widget's workspace disappears.
 
@@ -114,10 +119,10 @@ def test_workspace_navigation_hides_unneeded_content_and_preserves_date():
         at.segmented_control[0].set_value("Events & Traffic").run()
         assert not at.exception
         assert len(at.dataframe) == 1  # Present only in deliberate Advanced diagnostics.
-        at.segmented_control[0].set_value("Earnings & Fuel").run()
+        at.segmented_control[0].set_value("Results & Learning").run()
         assert not at.exception
         before_events, before_weather = event_fetch.call_count, weather_fetch.call_count
-        at.segmented_control[0].set_value("Earnings & Fuel").run()
+        at.segmented_control[0].set_value("Results & Learning").run()
         assert event_fetch.call_count == before_events
         assert weather_fetch.call_count == before_weather
         assert not at.date_input
@@ -128,7 +133,7 @@ def test_workspace_navigation_hides_unneeded_content_and_preserves_date():
 
 
 def test_separate_workspace_pure_helpers_keep_event_classification():
-    assert app.WORKSPACES == ("Drive", "Events & Traffic", "Earnings & Fuel")
+    assert app.WORKSPACES == ("Drive", "Events & Traffic", "Results & Learning")
     school = app.event_record("Pioneer Fall Choir Concert", "Pioneer High School",
                               "2026-10-17T19:00:00-04:00", None, "Fixture")
     game = app.event_record("Michigan Football", "Michigan Stadium",
