@@ -114,9 +114,10 @@ def test_private_results_login_and_logout_without_real_sheet_access():
         assert not at.exception
         assert any("Locked" == x.value for x in at.markdown)
         pwd = next(x for x in at.text_input if x.label == "Private data passphrase")
-        pwd.set_value(PASSWORD).run()
+        pwd.set_value(PASSWORD)
         unlock = next(b for b in at.button if b.label == "Unlock private results")
-        unlock.click().run()
+        unlock.click()
+        at.run()
         assert not at.exception
         assert any("Unlocked" == x.value for x in at.markdown)
         assert "sheet_shift_rows" not in at.session_state
