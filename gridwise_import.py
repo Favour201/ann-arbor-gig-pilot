@@ -88,8 +88,8 @@ def _base(report_type, row):
                   cohort="Archive only - no 2026 forecasting")
     if report_type == "earnings":
         output["earnings"] = _number(row["earnings"])
-        value = row.get("trips", "")
-        output["trips"] = _number(value, "count") if str(value).strip() else ""
+        value = row.get("trips")
+        output["trips"] = _number(value, "count") if value not in ("", None) else ""
     else:
         output["hours"] = _number(row["hours"])
         output["miles"] = _number(row["miles"])
