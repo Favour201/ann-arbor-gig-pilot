@@ -171,10 +171,16 @@ def test_default_dashboard_keeps_graphite_and_protects_journal():
         assert not at.exception
         assert at.session_state["pilot_workspace"] == "Drive"
         assert not at.number_input  # Default Drive remains focused.
-        assert any("Before you leave" in t.label for t in at.toggle)
+        assert not any("Before you leave" in t.label for t in at.toggle)
         assert any("Add planned shifts to calendar" in x.label for x in at.expander)
+        assert not any("Private decision journal" in x.label for x in at.expander)
+        assert not at.dataframe
+        at.segmented_control[0].set_value("Results & Learning").run()
+        assert not at.exception
+        assert not at.number_input
+        next(t for t in at.toggle if t.label == "Advanced tools · optional").set_value(True).run()
+        assert any("Before you leave" in t.label for t in at.toggle)
         next(t for t in at.toggle if "Before you leave" in t.label).set_value(True).run()
         assert not at.exception
         assert any("Estimated positioning miles" in n.label for n in at.number_input)
         assert any("Private decision journal" in x.label for x in at.expander)
-        assert not at.dataframe
