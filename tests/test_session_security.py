@@ -30,7 +30,7 @@ def test_private_session_expires_by_inactivity_and_absolute_lifetime():
     assert auth.needs_relock(state, PASSWORD, now=100 + 70 * 60)
     state = {}
     auth.authorize(state, PASSWORD, now=100)
-    for tick in range(1, 17):
+    for tick in range(1, 18):
         assert auth.valid(state, PASSWORD, now=100 + tick * 29 * 60) == (
             tick * 29 * 60 < auth.ABSOLUTE_SECONDS)
 
@@ -75,16 +75,27 @@ def test_auth_session_rejects_future_timestamp_and_tampered_ticket():
 
 
 def test_results_shows_exactly_one_login_form_when_advanced_open():
-    # A previous build rendered multiple driver_unlock forms, once in each
-    # collapsed Streamlit expander; that would fail when advanced tools opened.
+    # No live-feed calls or private credentials. Prior code produced duplicate
+    # password forms when multiple advanced expanders were rendered together.
     with patch.object(app, "setting", side_effect=lambda k, default="":
                       PASSWORD if k == "DRIVER_ACCESS_PASSWORD" else default):
-        at = AppTest.from_string("from app import main\nmain()",
-                                 default_timeout=25).run()
-        # Move straight to Results without network calls.
-        # The existing default Drive fetches live data, so this is tested
-        # via the isolated private view below instead.
-    assert "Secrets" not in str(at.exception)
+        at = AppTest.from_string(
+            "import streamlit as st\n"
+            "from app import render_results_workspace\n"
+            "from datetime import date\n"
+            "st.session_state['review_plan'] = ["
+            "{'app': 'Delivery', 'time': '5:00 PM – 8:00 PM', "
+            "'start_minute': 1020, 'end_minute': 1200}]\n"
+            "st.session_state['review_date'] = date(2026, 10, 13)\n"
+            "st.session_state['review_context'] = {}\n"
+            "render_results_workspace()",
+            default_timeout=25).run()
+        assert not at.exception
+        next(t for t in at.toggle if t.label == "Advanced tools · optional").set_value(True).run()
+        assert not at.exception
+        next(t for t in at.toggle if t.label == "Legacy fuel and earnings tools").set_value(True).run()
+        assert not at.exception
+        assert len([x for x in at.text_input if x.label == "Private data passphrase"]) == 1
 
 
 def test_private_results_login_and_logout_without_real_sheet_access():
