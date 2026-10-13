@@ -942,7 +942,8 @@ def render_calendar_export(drive_plan, day):
 
 def render_predeparture_check(selected_date, now, weather, events_data):
     """Assist a live go/no-go decision without predicting platform demand."""
-    with st.expander("Before you leave · decision check", expanded=False):
+    if st.toggle("Before you leave · decision check", value=False,
+                 key="show_decision_check"):
         st.caption("Free planning calculation. No Uber/Lyft/Delivery data is claimed live.")
         a, b = st.columns(2, gap="small")
         with a:
@@ -982,7 +983,7 @@ def render_predeparture_check(selected_date, now, weather, events_data):
                        "saved as an earnings ledger and won't sync to Gridwise.")
             payout = st.number_input("Actual offer payout ($)", min_value=0.0,
                                       value=0.0, step=1.0, key="offer_pay")
-            total_miles = st.number_input("All expected miles, including unpaid ($ not included)",
+            total_miles = st.number_input("All expected miles, including unpaid miles",
                                            min_value=0.1, max_value=500.0,
                                            value=10.0, step=0.5, key="offer_miles")
             minutes = st.number_input("Total expected driving and waiting minutes",
