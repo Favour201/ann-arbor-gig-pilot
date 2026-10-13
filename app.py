@@ -946,22 +946,23 @@ def render_predeparture_check(selected_date, now, weather, events_data):
     """Assist a live go/no-go decision without predicting platform demand."""
     if st.toggle("Before you leave · decision check", value=False,
                  key="show_decision_check"):
-        st.caption("Free planning calculation. No Uber/Lyft/Delivery data is claimed live.")
+        st.caption("Use this before driving to a busier area without an order. This is a gas-cost check, not a live demand forecast.")
         a, b = st.columns(2, gap="small")
         with a:
-            miles = st.number_input("Estimated positioning miles (one-way)",
+            miles = st.number_input("Miles to the area (one way)",
                                     min_value=0.0, max_value=150.0, step=1.0,
                                     value=0.0, key="decision_miles",
-                                    help="Only miles to the area from your start; round-trip fuel is an assumption.")
-            gas = st.number_input("Checked regular gas ($/gal)", min_value=0.0,
+                                    help="How far would you drive just to check for orders? We'll estimate gas for going there and coming back.")
+            gas = st.number_input("Gas price you checked ($/gal)", min_value=0.0,
                                   max_value=15.0, step=0.05,
                                   value=float(st.session_state.get("checked_gas_price", 0.0)),
                                   key="decision_checked_gas",
                                   help="Enter a price you actually checked. Zero means unknown.")
         with b:
-            max_fuel = st.number_input("Max positioning fuel spend ($)", min_value=0.0,
+            max_fuel = st.number_input("Max gas I'll waste chasing demand ($)", min_value=0.0,
                                        max_value=100.0, value=3.0, step=0.5,
-                                       key="decision_budget")
+                                       key="decision_budget",
+                                       help="Your gas budget for going there AND returning if you get no work. Not your total shift gas budget.")
             hours = st.number_input("Hours you can drive", min_value=0.25,
                                     max_value=16.0, step=0.5, value=3.0,
                                     key="decision_hours")
@@ -972,11 +973,11 @@ def render_predeparture_check(selected_date, now, weather, events_data):
         st.markdown("**" + assessment["status"] + "**")
         st.write(assessment["reason"])
         if assessment["fuel_cost"] is not None:
-            st.caption(f"Estimated fuel only, assuming return to start: "
-                       f"${assessment['fuel_cost']:.2f} at {MPG:g} MPG, "
-                       f"versus your ${max_fuel:.2f} positioning limit.")
+            st.caption(f"Gas to drive there and back with zero orders: "
+                       f"${assessment['fuel_cost']:.2f} (estimated at {MPG:g} MPG). "
+                       f"Your limit: ${max_fuel:.2f}. This is not your full-shift fuel cost.")
         else:
-            st.caption("Positioning fuel cannot be evaluated without a checked gas price.")
+            st.caption("Add a gas price you've checked to estimate the round-trip cost.")
         if assessment["weather_unknown"]:
             st.caption("Some forecast coverage is unknown. Check current road conditions.")
         st.caption("Crowd events do not guarantee rides or bonuses. This isn't a live surge scanner.")
