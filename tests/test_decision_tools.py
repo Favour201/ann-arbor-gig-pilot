@@ -182,5 +182,10 @@ def test_default_dashboard_keeps_graphite_and_protects_journal():
         assert any("Before you leave" in t.label for t in at.toggle)
         next(t for t in at.toggle if "Before you leave" in t.label).set_value(True).run()
         assert not at.exception
-        assert any("Estimated positioning miles" in n.label for n in at.number_input)
+        assert any(n.label == "Miles to the area (one way)" for n in at.number_input)
+        assert any(n.label == "Max gas I'll waste chasing demand ($)" for n in at.number_input)
+        assert not any("Max positioning fuel spend" in n.label for n in at.number_input)
+        assert any("returning if you get no work" in (n.help or "")
+                   for n in at.number_input
+                   if n.label == "Max gas I'll waste chasing demand ($)")
         assert any("Private decision journal" in x.label for x in at.expander)
