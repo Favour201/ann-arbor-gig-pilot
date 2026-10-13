@@ -149,10 +149,10 @@ def test_decision_sheet_creates_separate_tab_and_raw_values(monkeypatch):
 def test_private_decision_records_gate_fails_closed():
     from unittest.mock import patch
     at = AppTest.from_string("import app\nimport streamlit as st\n"
-                             "st.write(app.load_private_decisions())",
+                             "st.write('CLOSED' if not app.load_private_decisions() else 'OPEN')",
                              default_timeout=20).run()
     assert not at.exception
-    assert "[]" in [x.value for x in at.markdown]
+    assert "CLOSED" in [x.value for x in at.markdown]
     assert not any("user" in x.value for x in at.markdown)
 
 
@@ -170,7 +170,11 @@ def test_default_dashboard_keeps_graphite_and_protects_journal():
                                  default_timeout=25).run()
         assert not at.exception
         assert at.session_state["pilot_workspace"] == "Drive"
+        assert not at.number_input  # Default Drive remains focused.
+        assert any("Before you leave" in t.label for t in at.toggle)
+        assert any("Add planned shifts to calendar" in x.label for x in at.expander)
+        next(t for t in at.toggle if "Before you leave" in t.label).set_value(True).run()
+        assert not at.exception
         assert any("Estimated positioning miles" in n.label for n in at.number_input)
-        assert "Add planned shifts to calendar" in [x.label for x in at.expander]
         assert any("Private decision journal" in x.label for x in at.expander)
         assert not at.dataframe
