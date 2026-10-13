@@ -27,6 +27,7 @@ import hmac
 import statistics
 import pilot_features as pilot
 import decision_tools as decision
+import gridwise_import as gridwise
 
 MPG = 16.0
 TZ = ZoneInfo("America/New_York")
@@ -871,7 +872,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 </style>
 """
 
-WORKSPACES = ("Drive", "Events & Traffic", "Earnings & Fuel")
+WORKSPACES = ("Drive", "Events & Traffic", "Results & Learning")
 
 
 def remember_driving_date():
@@ -1147,19 +1148,19 @@ def render_driving_card(slot, step):
 
 
 def render_drive_workspace(selected_date, now, events_data, weather, base):
-    """Default view: a usable driving decision, not all source feeds."""
+    """One-glance driving decision; no offer-entry tools or earnings forms."""
     events = events_data["events"]
     major, local = partition_events(events)
     st.subheader("Your driving plan")
     st.caption(selected_date.strftime("%A, %B %d, %Y") +
-               " · Chronological suggestions, not required shifts")
+               " · Optional opportunities, not guaranteed demand")
     render_weather(weather, details=False)
 
     home_game = next((ev for ev in events if selected_date.weekday() in (5, 6)
                       and is_confirmed_michigan_home_game(ev)), None)
     with st.expander("Adjust driving plan", expanded=False):
         include_events = st.checkbox("Include major-event demand + traffic cues", value=True,
-                                     help="Only published times are used. Earnings are not guaranteed.")
+                                     help="Published events affect the brief; not guaranteed earnings.")
         include_local = st.checkbox("Include school-area traffic cues", value=True)
         smart_game_day = home_game is not None
         stop_buffer = 45
@@ -1176,57 +1177,58 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
         smart_game_day=smart_game_day, stop_buffer_minutes=stop_buffer,
         return_after_hours=return_delay)
     drive_plan = filter_roadmap(schedule, "Driving")
-    next_step = next_planning_window(drive_plan, selected_date, now)
+    next_step = next_planning_window(drive_plan, selected_date, now) \
+        if selected_date >= now.date() else None
+    context_events = [event for event in events if
+                      (event["tier"] != "NEIGHBORHOOD / SCHOOL" and include_events) or
+                      (event["tier"] == "NEIGHBORHOOD / SCHOOL" and include_local)]
+    decision_context = pilot.daily_decision_brief(
+        selected_date, {"events": context_events, "coverage": events_data.get("coverage", [])},
+        weather)
+    # A private plan snapshot lets Results & Learning record outcomes without
+    # fetching event/weather feeds on that workspace.
+    st.session_state["review_plan"] = drive_plan
+    st.session_state["review_date"] = selected_date
+    st.session_state["review_context"] = decision_context
 
-    if selected_date == now.date():
-        with st.container(border=True):
-            st.caption("CURRENT / NEXT STEP")
-            if next_step:
-                st.markdown(f"**{roadmap_title(next_step)}**")
-                st.markdown(f'<span class="pilot-timeline-time">{escape(next_step["time"])}</span>',
-                            unsafe_allow_html=True)
-            else:
-                st.caption("No timed driving windows remain today.")
+    with st.container(border=True):
+        st.caption("NEXT PLANNED OPPORTUNITY")
+        if next_step:
+            st.markdown(f"**{roadmap_title(next_step)}**")
+            st.markdown(
+                f'<span class="pilot-timeline-time">{escape(next_step["time"])}</span>',
+                unsafe_allow_html=True)
+            st.caption("Check actual offers, traffic and road conditions before leaving.")
+        else:
+            st.caption("No future driving windows available for this selected date.")
+
     if home_game and smart_game_day:
         st.caption(f"Michigan kickoff: {clock(home_game['start'])}. "
-                   "The split shift adapts when the official game time changes.")
+                   "Drive, rest and return windows follow the official time.")
 
-    render_predeparture_check(selected_date, now, weather, events_data)
+    if weather.get("hazards"):
+        st.caption("⚠ Forecast cautions: " + " · ".join(weather["hazards"]) +
+                   ". Safety before demand.")
+    elif any(p.get("status") != "Available" for p in weather.get("places", [])):
+        st.caption("Some forecast coverage is unknown; verify conditions before driving.")
+    if major or local:
+        st.caption(f"Published local context: {len(major)} major event(s), "
+                   f"{len(local)} school/neighborhood event(s). "
+                   "Potential congestion, not verified surge.")
 
-    st.markdown('<div class="pilot-section-head">Recommended windows</div>', unsafe_allow_html=True)
+    st.markdown('<div class="pilot-section-head">Planned windows</div>',
+                unsafe_allow_html=True)
     remaining = st.toggle("Hide finished windows", value=False, key="drive_remaining",
-                          help="On today, hide finished windows but keep active shifts.")
+                          help="Hide completed windows for today.")
     shown = filter_roadmap(drive_plan, selected_date=selected_date, now=now,
                            remaining=remaining)
     for i, slot in enumerate(shown, 1):
         render_driving_card(slot, i)
     if not shown:
-        st.info("No windows match. Turn off Hide finished windows to view the full plan.")
+        st.info("No windows match. Turn off Hide finished windows to see the full plan.")
 
     render_calendar_export(drive_plan, selected_date)
-    history_rows = load_private_history() if st.session_state.get("driver_authenticated") else []
-    daily_brief = pilot.daily_decision_brief(selected_date, events_data, weather, history_rows)
-    with st.expander("Your daily decision brief", expanded=False):
-        st.write("**Events & congestion:** " + daily_brief["events"])
-        st.write("**Forecast:** " + daily_brief["weather"])
-        if st.session_state.get("driver_authenticated"):
-            st.write("**Your results:** " + daily_brief["history"]["message"])
-        else:
-            st.caption("Personalized benchmarks unlock after logging shifts and "
-                       "accessing your private history in Earnings & Fuel.")
-        st.caption("These are planning clues. Check live driving-app offers and "
-                   "traffic before accepting work.")
-
-    render_decision_journal(selected_date, drive_plan, daily_brief)
-
-    critical = [ev for ev in major if ev["tier"] == "CRITICAL IMPACT"]
-    if critical:
-        st.caption(f"⚠ {len(critical)} major stadium event(s) may affect traffic. "
-                   "Check Events & Traffic before approaching the area.")
-    elif major or local:
-        st.caption(f"{len(major)} major · {len(local)} local published events. "
-                   "See Events & Traffic for congestion details.")
-    st.button("Review events & traffic →", use_container_width=True,
+    st.button("Explore events & traffic →", use_container_width=True,
               on_click=lambda: st.session_state.update(pilot_workspace="Events & Traffic"))
 
 
@@ -1503,7 +1505,7 @@ def render_earnings_workspace():
 
     live_gas = st.session_state.get("checked_gas_price", 0.0)
     live_gas = live_gas if isinstance(live_gas, (int, float)) and live_gas >= 0.5 else None
-    st.subheader("Weekly Profit Grader")
+    st.subheader("Optional weekly fuel-only grader")
     if live_gas is None:
         st.info("Enter a checked regular-gas price to enable grading.")
     else:
@@ -1536,6 +1538,117 @@ def render_earnings_workspace():
     render_shift_history()
 
 
+def render_gridwise_import():
+    """Owner-only archive; parse in memory, write ONLY on explicit confirmation."""
+    with st.expander("Import Gridwise reports · PDF or CSV", expanded=False):
+        st.caption("Use Gridwise as the source of truth. This importer accepts "
+                   "Gridwise earnings and mileage reports; it never logs into Gridwise.")
+        if not private_history_unlocked():
+            return
+        uploaded = st.file_uploader(
+            "Choose Gridwise reports (PDF or CSV)", type=["pdf", "csv"],
+            accept_multiple_files=True, key="gridwise_archive_files")
+        if not uploaded:
+            st.caption("Upload a report when you have one. Older-state or "
+                       "older-vehicle records stay ARCHIVED and do not influence 2026 advice.")
+            return
+        parsed = []
+        failures = []
+        for file in uploaded:
+            try:
+                parsed.append(gridwise.parse_gridwise_upload(file.name, file.getvalue()))
+            except ValueError as exc:
+                failures.append(f"{file.name}: {str(exc)}")
+        for message in failures:
+            st.warning(message)
+        if not parsed:
+            return
+        all_rows = []
+        for report in parsed:
+            info = gridwise.report_summary(report)
+            all_rows.extend(report["rows"])
+            total_label = ("gross earnings" if report["type"] == "earnings"
+                           else "tracked miles")
+            st.caption(
+                f"{report['type'].title()} · {report['format'].upper()} · "
+                f"{info['rows']} entries / {info['dates']} dates / "
+                f"{', '.join(map(str, info['years']))} · "
+                f"{info['total']:,.2f} {total_label}")
+        # Dedupe repeated rows across uploaded files before optional Sheet write.
+        unique = {row["row_key"]: row for row in all_rows}
+        archive_rows = list(unique.values())
+        comparison = gridwise.join_by_date(archive_rows)
+        matched = sum(row["earnings"] is not None and row["miles"] is not None
+                      for row in comparison)
+        st.caption(f"{matched} date(s) with both earnings and mileage information. "
+                   "Unmatched dates remain incomplete; no hour/mile values are invented.")
+        st.dataframe(
+            [{k: row[k] for k in ("date", "report_type", "platform", "trips",
+                                 "earnings", "hours", "miles")}
+             for row in archive_rows[:25]],
+            hide_index=True, use_container_width=True)
+        st.caption("Preview first 25 rows. Historical reports may reflect another "
+                   "state, vehicle and gas prices. No tax-deduction or historic fuel "
+                   "estimate is used for current decisions.")
+        sheet_id, credentials = private_sheet_config()
+        if not sheet_id or not credentials:
+            st.warning("Private Google Sheet is not configured; nothing is saved.")
+            return
+        if failures:
+            st.warning("Some uploads failed validation. Review them before saving.")
+        confirm = st.checkbox(
+            "I reviewed the preview; archive these historical entries in my private Sheet",
+            value=False, key="confirm_gridwise_archive")
+        if st.button("Save reviewed imports", disabled=not confirm,
+                     use_container_width=True):
+            try:
+                saved, duplicates = gridwise.archive_append_new(
+                    credentials, sheet_id, archive_rows)
+            except Exception:
+                st.error("Could not save to the private archive. No changes to Shifts "
+                         "or Decisions were requested. Check Sheet permissions.")
+            else:
+                st.success(f"{saved} row(s) saved to Gridwise_Archive; "
+                           f"{duplicates} duplicate row(s) skipped.")
+                st.session_state.pop("cached_gridwise_archive", None)
+
+
+def render_results_workspace():
+    """Gridwise complements this planning tool. Advanced forms remain accessible."""
+    st.subheader("Results & Learning")
+    st.caption("Gridwise Plus owns earnings, mileage and tax tracking. "
+               "This page is for reviewing Gig Pilot decisions, not duplicating trips.")
+    st.markdown("**Keep driving-app decisions fast.** Use Gig Pilot before a shift "
+                "and Gridwise for the actual results. There's no need to enter "
+                "every offer or every mile here.")
+    render_gridwise_import()
+
+    if st.toggle("Advanced tools · optional", value=False,
+                 key="results_advanced_tools"):
+        st.caption("Optional manual tools. None are needed while reviewing "
+                   "30–60-second live offers.")
+        if st.session_state.get("review_plan") is not None:
+            st.markdown("**Departure planning calculator**")
+            # Uses only already-loaded Drive context; no external feeds here.
+            snapshot = st.session_state.get("review_context", {})
+            history_weather = {"places": [{"status": "Unknown"}],
+                               "hazards": []}
+            history_events = {"events": []}
+            with st.expander("Positioning and hypothetical offer tools"):
+                render_predeparture_check(
+                    st.session_state["review_date"], datetime.now(TZ),
+                    history_weather, history_events)
+            render_decision_journal(
+                st.session_state["review_date"], st.session_state["review_plan"],
+                {"events": snapshot.get("events", ""),
+                 "weather": snapshot.get("weather", "")})
+        else:
+            st.caption("Visit Drive first to load a plan before reviewing "
+                       "or journaling a specific recommendation.")
+        with st.expander("Legacy fuel and earnings tools"):
+            render_earnings_workspace()
+
+
 def main():
     st.set_page_config(page_title="Graphite Pilot • Washtenaw Gig Pro",
                        page_icon="🛞", layout="centered", initial_sidebar_state="collapsed")
@@ -1559,8 +1672,8 @@ def main():
     view = st.segmented_control("Workspace", WORKSPACES, default="Drive",
                                 key="pilot_workspace",
                                 help="Choose one workspace. Your date and fuel entry are retained this session.")
-    if view == "Earnings & Fuel":
-        render_earnings_workspace()
+    if view == "Results & Learning":
+        render_results_workspace()
         return
 
     date_col, refresh_col = st.columns([3, 1], gap="small", vertical_alignment="bottom")
