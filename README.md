@@ -11,6 +11,50 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Private deployment and session security
+
+The source GitHub repository may stay public, but **the deployed Streamlit app
+should be private** because it is connected to an owner-only Google Sheet.
+
+**Required owner action (not possible from a GitHub code commit):**
+
+1. Sign into the Streamlit Community Cloud workspace at
+   https://share.streamlit.io/ and open the Gig Pilot app **Settings → Sharing**.
+2. Under **Who can view this app**, choose
+   **Only specific people can view this app**; save.
+3. Limit the approved viewer list to your own account and trusted household
+   members only. Test with a private/incognito window: an unapproved visitor
+   must not be able to open the dashboard. Community Cloud currently allows
+   one private app at a time per workspace.
+4. Confirm your Google Sheet's General access remains **Restricted** and the
+   only permitted identities are your Google account and the app service
+   account. Keep Google account two-step verification enabled.
+
+**Inside Results & Learning:** Use the single collapsed **Private access**
+section to unlock history/imports. Your existing
+\`DRIVER_ACCESS_PASSWORD\` remains in Streamlit Secrets (not GitHub). A valid
+unlock creates a session ticket stored only on the Streamlit server.
+The ticket expires after **30 minutes of inactivity** or **8 hours** since
+unlock, whichever comes first, when the app next processes an interaction.
+Use **Lock private data now** to immediately revoke the ticket and clear
+cached Sheet records, unsaved session-only records, and Gridwise uploader state
+from the running session. **Back up unsynced rows BEFORE locking**.
+Changing the secret password invalidates an existing ticket on its next
+access check. A boolean stored in session state alone cannot grant access.
+
+The previous per-session five-failed-attempt cap is retained as a convenience,
+not a network-level brute-force control: a new browser session can reset it.
+**Private Streamlit hosting is essential**. Account-based sign-in to view the
+private app is provided by Streamlit; the in-app passphrase is an extra
+protection for private financial records, not a replacement for real identity
+authentication. It is not necessary to create a second OAuth client solely
+for the first security phase.
+
+No API keys, private reports, OAuth secrets or passwords should ever be placed
+in GitHub, a support ticket, or a shared screenshot. The repository ignores
+\`.streamlit/secrets.toml\` and the \`.env\` file; confirm such files are
+never committed before pushing any branch.
+
 ## What to open and when (focused three-workspace pilot)
 
 **Drive is for a 30-second decision BEFORE you start driving.** It shows one
