@@ -26,6 +26,7 @@ import streamlit as st
 import hmac
 import statistics
 import pilot_features as pilot
+import decision_tools as decision
 
 MPG = 16.0
 TZ = ZoneInfo("America/New_York")
@@ -939,6 +940,198 @@ def render_calendar_export(drive_plan, day):
                            pilot.calendar_google_link(entry), use_container_width=True)
 
 
+def render_predeparture_check(selected_date, now, weather, events_data):
+    """Assist a live go/no-go decision without predicting platform demand."""
+    if st.toggle("Before you leave · decision check", value=False,
+                 key="show_decision_check"):
+        st.caption("Free planning calculation. No Uber/Lyft/Delivery data is claimed live.")
+        a, b = st.columns(2, gap="small")
+        with a:
+            miles = st.number_input("Estimated positioning miles (one-way)",
+                                    min_value=0.0, max_value=150.0, step=1.0,
+                                    value=0.0, key="decision_miles",
+                                    help="Only miles to the area from your start; round-trip fuel is an assumption.")
+            gas = st.number_input("Checked regular gas ($/gal)", min_value=0.0,
+                                  max_value=15.0, step=0.05,
+                                  value=float(st.session_state.get("checked_gas_price", 0.0)),
+                                  key="decision_checked_gas",
+                                  help="Enter a price you actually checked. Zero means unknown.")
+        with b:
+            max_fuel = st.number_input("Max positioning fuel spend ($)", min_value=0.0,
+                                       max_value=100.0, value=3.0, step=0.5,
+                                       key="decision_budget")
+            hours = st.number_input("Hours you can drive", min_value=0.25,
+                                    max_value=16.0, step=0.5, value=3.0,
+                                    key="decision_hours")
+        assessment = decision.drive_advice(
+            selected_date, now.date(), weather, events_data.get("events", []),
+            one_way_miles=miles, gas_price=gas if gas >= 0.5 else None,
+            max_position_fuel=max_fuel, work_hours=hours)
+        st.markdown("**" + assessment["status"] + "**")
+        st.write(assessment["reason"])
+        if assessment["fuel_cost"] is not None:
+            st.caption(f"Estimated fuel only, assuming return to start: "
+                       f"${assessment['fuel_cost']:.2f} at {MPG:g} MPG, "
+                       f"versus your ${max_fuel:.2f} positioning limit.")
+        else:
+            st.caption("Positioning fuel cannot be evaluated without a checked gas price.")
+        if assessment["weather_unknown"]:
+            st.caption("Some forecast coverage is unknown. Check current road conditions.")
+        st.caption("Crowd events do not guarantee rides or bonuses. This isn't a live surge scanner.")
+        with st.expander("Optional · sanity-check an actual app offer"):
+            st.caption("Use details visible in your driving app. These inputs are not "
+                       "saved as an earnings ledger and won't sync to Gridwise.")
+            payout = st.number_input("Actual offer payout ($)", min_value=0.0,
+                                      value=0.0, step=1.0, key="offer_pay")
+            total_miles = st.number_input("All expected miles, including unpaid miles",
+                                           min_value=0.1, max_value=500.0,
+                                           value=10.0, step=0.5, key="offer_miles")
+            minutes = st.number_input("Total expected driving and waiting minutes",
+                                       min_value=1.0, max_value=1440.0,
+                                       value=45.0, step=5.0, key="offer_minutes")
+            target = st.number_input("Your minimum after-fuel rate ($/hour)",
+                                     min_value=0.0, max_value=200.0,
+                                     value=20.0, step=1.0, key="offer_min_rate")
+            if payout > 0:
+                result = decision.offer_check(payout, total_miles, minutes,
+                                              gas if gas >= 0.5 else None, target)
+                st.markdown("**" + result["status"] + "**")
+                if "after_fuel_hour" in result:
+                    st.metric("Estimated after-fuel hourly",
+                              f"${result['after_fuel_hour']:.2f}/hr")
+                st.caption(result["message"])
+            else:
+                st.caption("Enter a real offer to compare against your own hourly target.")
+
+
+def load_private_decisions():
+    """Return private plan snapshots only to authenticated Streamlit sessions."""
+    if not st.session_state.get("driver_authenticated"):
+        return []
+    if "journal_sheet_records" not in st.session_state:
+        sheet_id, credentials = private_sheet_config()
+        if sheet_id and credentials:
+            try:
+                st.session_state["journal_sheet_records"] = decision.decision_sheet_load(
+                    credentials, sheet_id)
+                st.session_state.pop("journal_sheet_error", None)
+            except Exception:
+                st.session_state["journal_sheet_records"] = []
+                st.session_state["journal_sheet_error"] = (
+                    "Decision journal could not be read from Google Sheets. "
+                    "Back up any temporary entries with CSV.")
+        else:
+            st.session_state["journal_sheet_records"] = []
+    combined = {}
+    for row in (st.session_state["journal_sheet_records"] +
+                st.session_state.get("journal_pending_records", [])):
+        if row.get("id"):
+            combined[str(row["id"])] = row
+    return sorted(combined.values(), key=lambda r: str(r.get("created_at", "")),
+                  reverse=True)
+
+
+def render_decision_journal(selected_date, drive_plan, daily_brief):
+    """Plan / outcome loop; never duplicate Gridwise earnings or mileage logs."""
+    with st.expander("Private decision journal · learn from your plans", expanded=False):
+        st.caption("Record what you chose and later whether it was worth it. "
+                   "Gridwise still owns earnings, mileage and taxes.")
+        if not private_history_unlocked():
+            return
+        sheet_id, credentials = private_sheet_config()
+        connected = bool(sheet_id and credentials)
+        rows = load_private_decisions()
+        if st.session_state.get("journal_sheet_error"):
+            st.warning(st.session_state["journal_sheet_error"])
+        valid = [i for i, slot in enumerate(drive_plan)
+                 if slot["app"] in decisionable_apps() and
+                 slot.get("start_minute") is not None]
+        if valid:
+            with st.form("plan_decision_form"):
+                chosen = st.selectbox("Which planned driving window?", valid,
+                                      format_func=lambda i: (
+                                          f"{roadmap_title(drive_plan[i])} · "
+                                          f"{drive_plan[i]['time']}"))
+                choice = st.radio("What did you decide?", decision.CHOICES,
+                                  horizontal=True, index=1)
+                reason = st.text_input("Reason / observation (optional)",
+                                        max_chars=240)
+                submitted = st.form_submit_button("Record my decision",
+                                                   use_container_width=True)
+            if submitted:
+                record = decision.new_decision(selected_date, drive_plan[chosen],
+                                               choice, reason, daily_brief,
+                                               one_way_miles=st.session_state.get(
+                                                   "decision_miles", 0.0),
+                                               gas_price=st.session_state.get(
+                                                   "decision_checked_gas", 0.0))
+                if connected:
+                    try:
+                        decision.decision_sheet_append(credentials, sheet_id, record)
+                    except Exception:
+                        st.session_state.setdefault("journal_pending_records", []).append(record)
+                        st.warning("Sheet write failed. This plan is only in your session; "
+                                   "download the CSV backup below.")
+                    else:
+                        st.session_state.setdefault("journal_sheet_records", []).insert(0, record)
+                        st.success("Decision saved to the private Decisions worksheet.")
+                else:
+                    st.session_state.setdefault("journal_pending_records", []).append(record)
+                    st.warning("Sheet not connected. This plan is temporary; "
+                               "download a CSV backup.")
+                rows = load_private_decisions()
+        else:
+            st.caption("No timed driving windows to record for this date.")
+        if rows:
+            summary = decision.decision_summary(rows)
+            st.caption(summary["message"])
+            pending = [r for r in rows if r.get("result") == "Unreviewed"]
+            if pending:
+                with st.form("review_plan_outcome"):
+                    ids = [r["id"] for r in pending]
+                    selected_id = st.selectbox(
+                        "Review an earlier decision", options=ids,
+                        format_func=lambda id_: next(
+                            f"{r['planned_date']} · {r['window_time']} · {r['choice']}"
+                            for r in pending if r["id"] == id_))
+                    result = st.selectbox("How did that decision work out?",
+                                           decision.OUTCOMES[1:])
+                    takeaway = st.text_input("What did you learn? (optional)",
+                                              max_chars=300)
+                    review_submitted = st.form_submit_button("Save outcome")
+                if review_submitted:
+                    record = next(r for r in rows if r["id"] == selected_id)
+                    in_sheet = any(r["id"] == selected_id for r in
+                                   st.session_state.get("journal_sheet_records", []))
+                    if connected and in_sheet:
+                        try:
+                            decision.decision_sheet_review(
+                                credentials, sheet_id, selected_id, result, takeaway)
+                        except Exception:
+                            st.warning("Outcome was not saved to the Sheet. Try again.")
+                        else:
+                            record["result"], record["takeaway"] = result, takeaway
+                            st.success("Outcome saved.")
+                    elif not in_sheet:
+                        record["result"], record["takeaway"] = result, takeaway
+                        st.warning("Outcome updated in this session. Download a CSV backup.")
+                    else:
+                        st.warning("Sheet disconnected; could not persist this outcome.")
+            with st.expander("View past decisions", expanded=False):
+                st.dataframe(rows[:100], hide_index=True,
+                             use_container_width=True)
+        else:
+            st.caption("No decisions recorded. Start by saving what you actually chose.")
+        st.download_button("Back up private decision journal (CSV)",
+                           data=decision.decision_csv_backup(rows),
+                           file_name="ogbuefi-decisions.csv",
+                           mime="text/csv", use_container_width=True)
+
+
+def decisionable_apps():
+    return ("Delivery", "XL / Comfort")
+
+
 def render_driving_card(slot, step):
     """Compact timeline row; all routing instructions remain available on tap."""
     with st.container(border=True):
@@ -998,6 +1191,8 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
         st.caption(f"Michigan kickoff: {clock(home_game['start'])}. "
                    "The split shift adapts when the official game time changes.")
 
+    render_predeparture_check(selected_date, now, weather, events_data)
+
     st.markdown('<div class="pilot-section-head">Recommended windows</div>', unsafe_allow_html=True)
     remaining = st.toggle("Hide finished windows", value=False, key="drive_remaining",
                           help="On today, hide finished windows but keep active shifts.")
@@ -1021,6 +1216,8 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
                        "accessing your private history in Earnings & Fuel.")
         st.caption("These are planning clues. Check live driving-app offers and "
                    "traffic before accepting work.")
+
+    render_decision_journal(selected_date, drive_plan, daily_brief)
 
     critical = [ev for ev in major if ev["tier"] == "CRITICAL IMPACT"]
     if critical:

@@ -11,6 +11,37 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Driving decision check and private outcome journal (no Gridwise duplication)
+
+On **Drive**, open **Before you leave · decision check**. Supply an *actual checked*
+regular-gas price (not GasBuddy's guessed price), your estimated **one-way**
+positioning miles, your maximum speculative positioning-fuel spend and how many
+hours you can drive. A simple 16 MPG round-trip repositioning estimate compares
+the fuel cost against **your** threshold. It NEVER claims actual app demand,
+live surge, traffic travel times, road closures or predicted earnings. Weather
+cautions prompt an independent safety check. If an app presents a **real offer**,
+use the optional offer calculator to compare entered payout, **all** miles
+including unpaid mileage and total minutes against your personal after-fuel
+hourly minimum. Scenario inputs are not logged as tax or earnings data.
+
+Open **Private decision journal · learn from your plans** to save which actual
+time window you considered, whether you chose **Drive / Monitor / Skip**, and
+your reason. It captures the current event/weather brief, selected plan time
+and optional positioning fuel assumption as a snapshot. After the shift, review
+that decision as **Worth it / Mixed / Not worth it / Skipped**, adding a takeaway.
+At least 3 reviewed plans are required before the app summarizes the number
+marked worthwhile. These are your subjective outcomes, not measured earnings
+improvements, statistical proof or demand forecasts.
+
+The journal uses the *existing private spreadsheet* as a separate **Decisions**
+worksheet (created automatically on first owner-authenticated visit) and does
+not modify the older **Shifts** tab. The existing Streamlit driver passphrase
+must be configured and unlocked. When Sheets is unavailable, new plan entries
+remain **temporary in this browser session** and a CSV backup is offered.
+No Gridwise password or undocumented API endpoint is needed. Gridwise Plus
+remains authoritative for actual earnings, mileage and tax reports; its report
+CSV import is a future optional feature, not a prerequisite.
+
 ## Calendar exports (current planning date)
 
 On Drive, expand **Add planned shifts to calendar**, explicitly select the
