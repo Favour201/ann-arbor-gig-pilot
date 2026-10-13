@@ -28,6 +28,7 @@ import statistics
 import pilot_features as pilot
 import decision_tools as decision
 import gridwise_import as gridwise
+import session_security as security
 
 MPG = 16.0
 TZ = ZoneInfo("America/New_York")
@@ -1007,7 +1008,7 @@ def render_predeparture_check(selected_date, now, weather, events_data):
 
 def load_private_decisions():
     """Return private plan snapshots only to authenticated Streamlit sessions."""
-    if not st.session_state.get("driver_authenticated"):
+    if not private_session_active():
         return []
     if "journal_sheet_records" not in st.session_state:
         sheet_id, credentials = private_sheet_config()
@@ -1037,7 +1038,7 @@ def render_decision_journal(selected_date, drive_plan, daily_brief):
     with st.expander("Private decision journal · learn from your plans", expanded=False):
         st.caption("Record what you chose and later whether it was worth it. "
                    "Gridwise still owns earnings, mileage and taxes.")
-        if not private_history_unlocked():
+        if not private_history_unlocked(show_form=False):
             return
         sheet_id, credentials = private_sheet_config()
         connected = bool(sheet_id and credentials)
@@ -1323,29 +1324,49 @@ def load_private_history():
                                    st.session_state.get("unsynced_shift_rows", []))
 
 
-def private_history_unlocked():
-    """Protect personal financial data on a publicly reachable Streamlit app."""
-    configured = setting("DRIVER_ACCESS_PASSWORD", "")
-    if len(configured) < 12:
-        st.info("Private shift history is locked until DRIVER_ACCESS_PASSWORD "
-                "(12+ characters) is set in Streamlit app secrets. "
-                "No financial history is exposed or saved to the cloud without it.")
-        return False
-    if st.session_state.get("driver_authenticated"):
+def private_session_active():
+    """Only a valid, unexpired session can read any private Google Sheet data."""
+    password = setting("DRIVER_ACCESS_PASSWORD", "")
+    if security.valid(st.session_state, password):
         return True
+    if (security.PRIVATE_SESSION_KEY in st.session_state or
+            st.session_state.get("driver_authenticated")):
+        security.lock(st.session_state)
+    return False
+
+
+def lock_private_session():
+    """Logout action: revoke access AND clear cached private records/uploads."""
+    security.lock(st.session_state)
+    st.session_state.pop("driver_login_failures", None)
+
+
+def private_history_unlocked(*, show_form=True):
+    """One login form on Results; never duplicate password widgets in expanders."""
+    configured = setting("DRIVER_ACCESS_PASSWORD", "")
+    if not security.password_is_configured(configured):
+        if show_form:
+            st.info("Private records are disabled until DRIVER_ACCESS_PASSWORD "
+                    "(12+ characters) is configured in Streamlit Secrets.")
+        return False
+    if private_session_active():
+        return True
+    if not show_form:
+        return False
     attempts = st.session_state.get("driver_login_failures", 0)
     if attempts >= 5:
-        st.error("Too many attempts in this session. Close this session and retry. "
-                 "For stronger security, make the Streamlit app private and use identity login.")
+        st.error("This session reached the maximum login attempts. "
+                 "Private Community Cloud access is the primary protection "
+                 "against unauthorized visitors.")
         return False
-    with st.form("driver_unlock"):
-        password = st.text_input("Driver access passphrase", type="password",
-                                 help="Only the owner should unlock private earnings history.")
-        submitted = st.form_submit_button("Unlock private history")
+    with st.form("driver_unlock", clear_on_submit=True):
+        password = st.text_input("Private data passphrase", type="password",
+                                 help="Only the dashboard owner should unlock private records.")
+        submitted = st.form_submit_button("Unlock private results")
     if submitted:
-        if hmac.compare_digest(password.encode(), configured.encode()):
-            st.session_state["driver_authenticated"] = True
-            st.session_state["driver_login_failures"] = 0
+        if hmac.compare_digest(password.encode("utf-8"), configured.encode("utf-8")):
+            security.authorize(st.session_state, configured)
+            st.session_state.pop("driver_login_failures", None)
             st.rerun()
         else:
             st.session_state["driver_login_failures"] = attempts + 1
@@ -1356,7 +1377,7 @@ def private_history_unlocked():
 def render_shift_history():
     """Private history stays inside Earnings & Fuel and requires configured access."""
     with st.expander("🔒 Shift history & insights", expanded=False):
-        if not private_history_unlocked():
+        if not private_history_unlocked(show_form=False):
             return
         sheet_id, credentials = private_sheet_config()
         connected = bool(sheet_id and credentials)
@@ -1543,7 +1564,7 @@ def render_gridwise_import():
     with st.expander("Import Gridwise reports · PDF or CSV", expanded=False):
         st.caption("Use Gridwise as the source of truth. This importer accepts "
                    "Gridwise earnings and mileage reports; it never logs into Gridwise.")
-        if not private_history_unlocked():
+        if not private_history_unlocked(show_form=False):
             return
         uploaded = st.file_uploader(
             "Choose Gridwise reports (PDF or CSV)", type=["pdf", "csv"],
@@ -1618,6 +1639,15 @@ def render_results_workspace():
     st.subheader("Results & Learning")
     st.caption("Gridwise Plus owns earnings, mileage and tax tracking. "
                "This page is for reviewing Gig Pilot decisions, not duplicating trips.")
+    with st.expander("🔒 Private access", expanded=False):
+        if private_session_active():
+            st.caption("Private records unlocked · automatically locks after "
+                       "30 minutes without interaction or 8 hours total.")
+            st.button("Lock private data now", key="driver_explicit_logout",
+                      on_click=lock_private_session, use_container_width=True)
+        else:
+            private_history_unlocked()
+
     st.markdown("**Keep driving-app decisions fast.** Use Gig Pilot before a shift "
                 "and Gridwise for the actual results. There's no need to enter "
                 "every offer or every mile here.")
