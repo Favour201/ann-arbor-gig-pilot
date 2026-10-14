@@ -28,6 +28,7 @@ import statistics
 import pilot_features as pilot
 import decision_tools as decision
 import gridwise_import as gridwise
+import weather_outlook as weather_ui
 import session_security as security
 
 MPG = 16.0
@@ -757,18 +758,46 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
 
 
 def render_weather(weather, *, details=True):
-    if weather["hazards"]:
-        st.markdown('<div class="weather-premium" role="status"><strong>⚠ Weather Premium Surge Warning</strong><br>'
-                    + escape(" • ".join(weather["hazards"]))
-                    + '<br><small>Demand may increase. Confirm pricing in your driver app; drive only when conditions permit.</small></div>', unsafe_allow_html=True)
-    for place in weather["places"]:
-        if place["status"] != "Available":
-            st.caption(f"{place['place']}: {place['status']}. This does not indicate clear weather.")
+    """Compact graphite NWS outlook for the selected date; never forecast surge."""
+    outlook = weather_ui.summarize_weather_outlook(weather)
+    severity = outlook["severity"]
+    temp = outlook["temperature"]
+    if temp is None:
+        temp_html = '<span class="pilot-weather-no-temp">Temperature unavailable</span>'
+    else:
+        values = f"Forecast {temp}°F"
+        if outlook["high"] is not None and outlook["low"] is not None:
+            values += f'<small>Forecast high {outlook["high"]}° · low {outlook["low"]}°</small>'
+        else:
+            values += '<small>Selected forecast period</small>'
+        temp_html = '<span class="pilot-weather-temp">' + escape(values.split("<small>")[0])
+        if "<small>" in values:
+            temp_html += "<small>" + escape(values.split("<small>", 1)[1].split("</small>", 1)[0]) + "</small>"
+        temp_html += "</span>"
+
+    period_title = ((outlook["period_name"] + " · ") if outlook["period_name"] else "")
+    place = (outlook["place"] + " · ") if outlook["place"] else ""
+    st.markdown(
+        '<div class="pilot-weather-card pilot-weather-' + escape(severity) + '" role="status">'
+        '<div class="pilot-weather-kicker">WEATHER DRIVING OUTLOOK</div>'
+        '<div class="pilot-weather-head">'
+        '<div><div class="pilot-weather-label">' + escape(outlook["icon"]) + " "
+        + escape(outlook["title"]) + '</div>'
+        '<span class="pilot-weather-pill">' + escape(outlook["pill"]) + '</span></div>'
+        + temp_html + '</div>'
+        '<div class="pilot-weather-forecast">' + escape(period_title + outlook["forecast"]) + '</div>'
+        '<div class="pilot-weather-note">' + escape(outlook["note"]) + '</div>'
+        '<div class="pilot-weather-source">' + escape(place + "NWS forecast · selected driving date")
+        + '</div></div>',
+        unsafe_allow_html=True,
+    )
     if details:
         with st.expander("Weather forecast details"):
             st.caption(f"Checked {weather['checked'].strftime('%b %d, %I:%M %p %Z')} • Cold threshold: {COLD_F}°F")
             for place in weather["places"]:
                 st.write(place["place"])
+                if place["status"] != "Available":
+                    st.caption(place["status"] + " · This does not indicate clear weather.")
                 for period in place["periods"]:
                     st.write(f"{period.get('name', '')}: {period.get('temperature', '—')}°{period.get('temperatureUnit', '')} · {period.get('shortForecast', '')}")
                 if place["url"]:
@@ -883,12 +912,49 @@ button:focus-visible,a:focus-visible,input:focus-visible,
 [data-testid="stSegmentedControl"] button[aria-pressed="true"] {
   background:#484744 !important;color:#FFFDF7 !important;
 }
-.weather-premium {
-  background:#4A3718 !important;color:#FFECC2 !important;
-  border:1px solid #C99B3D !important;border-radius:12px;
-  padding:14px 16px;margin:12px 0;line-height:1.58;
+.pilot-weather-card {
+  background:#202124;border:1px solid #414348;border-left:4px solid #8d939c;
+  color:#f1f0ed;border-radius:13px;padding:14px 15px;
+  margin:12px 0 16px;
 }
-.weather-premium strong,.weather-premium small {color:#FFE9B3 !important;}
+.pilot-weather-kicker {
+  color:#aaa8a4;font-size:.69rem;font-weight:790;letter-spacing:.10em;
+  margin-bottom:10px;
+}
+.pilot-weather-head {
+  display:flex;justify-content:space-between;align-items:flex-start;gap:10px;
+}
+.pilot-weather-label {font-size:.96rem;font-weight:750;line-height:1.35;color:#f1f0ed;}
+.pilot-weather-pill {
+  display:inline-block;margin-top:8px;font-size:.65rem;font-weight:800;
+  border-radius:12px;padding:4px 8px;letter-spacing:.04em;
+}
+.pilot-weather-temp {
+  flex-shrink:0;font-size:1.08rem;line-height:1.2;font-weight:740;text-align:right;
+  font-variant-numeric:tabular-nums;color:#f3f2ef;
+}
+.pilot-weather-temp small {
+  display:block;color:#bebbb7;font-size:.69rem;font-weight:450;
+  margin-top:5px;white-space:normal;
+}
+.pilot-weather-no-temp {font-size:.72rem;text-align:right;color:#aaa8a4;}
+.pilot-weather-forecast {font-size:.85rem;color:#e4e1dc;margin-top:11px;line-height:1.5;}
+.pilot-weather-note {
+  border-top:1px solid #3a3b3e;margin-top:12px;padding-top:10px;
+  font-size:.78rem;line-height:1.5;color:#d2d0cb;
+}
+.pilot-weather-source {font-size:.69rem;color:#aaa8a4;margin-top:9px;}
+.pilot-weather-good {border-left-color:#6cae8a;}
+.pilot-weather-good .pilot-weather-pill {color:#b9e7c9;background:#2b4234;}
+.pilot-weather-caution {border-left-color:#e3b35c;}
+.pilot-weather-caution .pilot-weather-pill {color:#ffe0a0;background:#4a3822;}
+.pilot-weather-high {
+  border-left-color:#f17078;background:linear-gradient(105deg,#2e2227,#202124 77%);
+  border-top-color:#644047;border-bottom-color:#644047;
+}
+.pilot-weather-high .pilot-weather-pill {color:#ffc0c5;background:#542c34;}
+.pilot-weather-unknown {border-left-color:#92979e;}
+.pilot-weather-unknown .pilot-weather-pill {color:#d7d9dd;background:#383b40;}
 @media(max-width:600px){
   .block-container {padding:3.45rem .85rem 2.5rem !important;}
   .pilot-hero {padding:18px 16px;border-radius:16px;}
@@ -1242,11 +1308,6 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
         st.caption(f"Michigan kickoff: {clock(home_game['start'])}. "
                    "Drive, rest and return windows follow the official time.")
 
-    if weather.get("hazards"):
-        st.caption("⚠ Forecast cautions: " + " · ".join(weather["hazards"]) +
-                   ". Safety before demand.")
-    elif any(p.get("status") != "Available" for p in weather.get("places", [])):
-        st.caption("Some forecast coverage is unknown; verify conditions before driving.")
     if major or local:
         st.caption(f"Published local context: {len(major)} major event(s), "
                    f"{len(local)} school/neighborhood event(s). "
