@@ -1,10 +1,87 @@
-"""Driver-facing NWS forecast summary, separate from event/demand predictions.
-
-Only already date-filtered weather periods from the existing NWS feed are
-considered. Temperatures are forecast values, never live observations.
-"""
+"""NWS hourly work-window forecasts, separate from event/demand predictions."""
 import math
 import re
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
+TZ = ZoneInfo("America/New_York")
+
+
+def work_weather_ranges(slots, day, now):
+    """Two-hour preparation lead plus driving; omit rest and elapsed hours."""
+    midnight = datetime.combine(day, time.min, tzinfo=TZ)
+    local_now = now.astimezone(TZ)
+    ranges = []
+    for slot in slots:
+        if slot.get("app") not in ("Delivery", "XL / Comfort"):
+            continue
+        start, end = slot.get("start_minute"), slot.get("end_minute")
+        if start is None or end is None or end <= start:
+            continue
+        left = max(midnight, midnight + timedelta(minutes=start - 120), local_now)
+        right = midnight + timedelta(minutes=end)
+        if left < right:
+            ranges.append((left, right))
+    merged = []
+    for left, right in sorted(ranges):
+        if merged and left <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(right, merged[-1][1]))
+        else:
+            merged.append((left, right))
+    return merged
+
+
+def _period_bounds(period):
+    start = datetime.fromisoformat(period["startTime"].replace("Z", "+00:00"))
+    end = datetime.fromisoformat(period["endTime"].replace("Z", "+00:00"))
+    if start.tzinfo is None or end.tzinfo is None or end <= start:
+        raise ValueError("Forecast needs valid timezone-aware bounds")
+    return start.astimezone(TZ), end.astimezone(TZ)
+
+
+def weather_for_work(weather, slots, day, now):
+    """Scope hourly NWS data to preparation/driving, tracking coverage gaps."""
+    ranges = work_weather_ranges(slots, day, now)
+    labels = [f"{a.strftime('%a')} {a.strftime('%I:%M %p').lstrip('0')}–"
+              f"{b.strftime('%I:%M %p').lstrip('0')}" for a, b in ranges]
+    places = []
+    for place in weather.get("places", []):
+        matching, spans = [], []
+        for period in place.get("periods", []):
+            try:
+                start, end = _period_bounds(period)
+            except (KeyError, ValueError, TypeError):
+                continue
+            # Do not relabel a broad overnight forecast as precise hourly data.
+            if end - start > timedelta(hours=1):
+                continue
+            if not any(start < right and end > left for left, right in ranges):
+                continue
+            label = f"{start.strftime('%a')} {start.strftime('%I:%M %p').lstrip('0')}"
+            matching.append({**period, "name": label})
+            if temperature_f(period) is not None and str(period.get("shortForecast") or "").strip():
+                spans.append((start, end))
+        complete = bool(ranges)
+        for left, right in ranges:
+            cursor = left
+            for start, end in sorted(spans):
+                if start > cursor:
+                    break
+                if end > cursor:
+                    cursor = end
+                if cursor >= right:
+                    break
+            complete = complete and cursor >= right
+        hazards = [f"{p['name']}: {p.get('shortForecast', '')} "
+                   f"({temperature_f(p)}°F)" for p in matching
+                   if period_impact(p) != "good"]
+        places.append({**place, "periods": matching, "hazards": hazards,
+                       "coverage_complete": complete,
+                       "status": "Available" if matching else "Work-hour forecast unavailable"})
+    return {**weather, "places": places, "work_scoped": True,
+            "hazards": sorted({h for p in places for h in p["hazards"]}),
+            "window_label": " · ".join(labels) if ranges else "No remaining planned driving hours",
+            "window_note": "Up to 2 hours before driving + planned driving hours; optional windows included."}
 
 LABELS = {
     "good": ("☀️", "Favorable conditions", "LOW IMPACT"),
@@ -54,12 +131,15 @@ def period_impact(period):
     text = " ".join(str(period.get(k) or "")
                     for k in ("shortForecast", "detailedForecast"))
     temp = temperature_f(period)
+    wind = str(period.get("windSpeed") or "")
+    speeds = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", wind)] if "mph" in wind.lower() else []
+    max_wind = max(speeds, default=0)
     # NWS phrases can contain "a chance of thunderstorms", and should be
     # flagged as potential storm risk rather than presented as a certainty.
-    if DANGEROUS.search(text) or (temp is not None and temp <= 15):
+    if DANGEROUS.search(text) or (temp is not None and temp <= 15) or max_wind >= 40:
         return "high"
     if (SNOW.search(text) or RAIN.search(text) or WIND.search(text)
-            or (temp is not None and (temp <= 32 or temp >= 95))):
+            or max_wind >= 20 or (temp is not None and (temp <= 32 or temp >= 95))):
         return "caution"
     return "good"
 
@@ -105,12 +185,15 @@ def summarize_weather_outlook(weather):
     places = weather.get("places") or []
     available = [p for p in places
                  if p.get("status") == "Available" and p.get("periods")]
-    coverage_complete = bool(places) and len(available) == len(places)
+    coverage_complete = (bool(places) and len(available) == len(places)
+                         and all(p.get("coverage_complete", True) for p in available))
     if not available:
         return {
             "severity": "unknown", "title": LABELS["unknown"][1],
             "icon": LABELS["unknown"][0], "pill": LABELS["unknown"][2],
-            "forecast": "Forecast not available for this selected date",
+            "forecast": ("Hourly forecast unavailable for your work hours"
+                         if weather.get("work_scoped") else
+                         "Forecast not available for this selected date"),
             "note": forecast_note("unknown", ""),
             "temperature": None, "high": None, "low": None, "place": "",
             "period_name": "", "partial_coverage": False,
@@ -138,6 +221,11 @@ def summarize_weather_outlook(weather):
     detailed = str(representative.get("detailedForecast") or "").strip()
     period_name = str(representative.get("name") or "").strip()
     description = short or detailed or "Check the NWS forecast for details"
+    if representative.get("windSpeed"):
+        description += f" · Wind {representative['windSpeed']}"
+    hidden_risk = DANGEROUS.search(detailed)
+    if hidden_risk and not DANGEROUS.search(short):
+        description += f" · Forecast also mentions {hidden_risk.group(0).lower()}"
     temperature = temperature_f(representative)
     note = forecast_note(severity, short + " " + detailed)
     if not coverage_complete:
@@ -167,3 +255,4 @@ def summarize_weather_outlook(weather):
         "period_name": period_name,
         "partial_coverage": not coverage_complete,
     }
+
