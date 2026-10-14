@@ -59,10 +59,18 @@ never committed before pushing any branch.
 
 **Drive is for a 30-second decision BEFORE you start driving.** It shows one
 next planned window, a short event/weather/traffic caution, other chronological
-windows and the original working calendar export. Existing verified Michigan
-game-day drive → rest → return logic and timing sliders are unchanged. No live
-offer input or private journal appears on the landing screen. This is *not* a
-live Uber/Lyft offer scanner and never promises demand, surge or profit.
+windows and the original working calendar export. The plan prioritizes Uber
+Eats and DoorDash deliveries at every time of day, including Michigan football
+pregame and return windows. Uber Comfort and XL can remain enabled for good
+actual ride offers, but Gig Pilot never assumes that you should switch to
+rideshare at 8 PM (or after the game). Lyft isn't a scheduled driving priority.
+Open-ended evening windows are **optional reconsideration points**, not a
+commitment to keep driving. The driver's current **$3 per estimated total mile**
+target is shown as a personal live-offer preference, counting pickup and likely
+unpaid miles—not a forecast, minimum guaranteed earnings, or an automatic filter.
+Verified game-day drive → rest → return timings and sliders are unchanged.
+No live offer input or private journal appears on the landing screen. This is
+*not* a live Uber/Lyft offer scanner and never promises demand, surge or profit.
 
 **Events & Traffic** retains the official calendar feeds, venue/school
 congestion context, detailed NWS forecasts and the collapsed diagnostics.
@@ -174,7 +182,7 @@ Unknown feed coverage and insufficient history are labeled explicitly.
 
 For a **confirmed Michigan Stadium football kickoff on Saturday or Sunday**, the roadmap automatically recommends a practical **pregame drive → home rest → return** pattern instead of showing only one broad pregame crowd window. By default, a **3:30 PM** kickoff suggests driving **12:30–2:45 PM**, taking a break **2:45–5:30 PM**, and returning **5:30 PM onward** (subject to real demand, traffic, road closures and personal preference). Use the existing *Roadmap filters & game-day preferences* expander to change the stop buffer to **30 / 45 / 60 minutes**, or the return delay to **1–4 hours after kickoff**. For noon kickoffs, the return block will not begin before 3 PM.
 
-The three recommendations are clearly identified as optional and are chronological. They replace the generic Saturday/Sunday baseline to avoid contradictory overlap, but other independent local event alerts remain visible. The game stays **Kickoff TBD** until its official athletics schedule publishes a usable clock time; we do not fabricate split-shift timings for unknown or away games. The plan does not predict surge or override unsafe weather/road conditions.
+The pregame and optional return blocks are **delivery-first**, with Comfort/XL treated as optional opportunistic rides rather than an automatic mode change. Keep Uber Eats and DoorDash in focus; use actual offers and the personal $3/mile goal to decide whether driving makes sense. They replace the generic Saturday/Sunday baseline to avoid contradictory overlap, but other independent local event alerts remain visible. The game stays **Kickoff TBD** until its official athletics schedule publishes a usable clock time; we do not fabricate split-shift timings for unknown or away games. The plan does not predict surge or override unsafe weather/road conditions.
 
 ### Less intrusive Streamlit chrome
 
