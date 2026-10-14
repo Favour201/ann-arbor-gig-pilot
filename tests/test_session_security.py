@@ -1,15 +1,58 @@
 """Authentication regression tests never use real user passwords or cloud creds."""
 from datetime import datetime, timezone
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
 import app
 import session_security as auth
+import pilot_features as pilot
 
 
 PASSWORD = "temporary-test-passphrase-that-is-not-a-secret"
+
+
+def test_valid_session_loads_saved_and_pending_shifts_and_backs_them_up(monkeypatch):
+    saved = pilot.new_shift(datetime(2026, 10, 14).date(), "Uber", "Ann Arbor",
+                            "Dinner", 80, 2, 20, 3.5)
+    pending = {**saved, "id": "pending-shift"}
+    state = {"unsynced_shift_rows": [pending]}
+    auth.authorize(state, PASSWORD)
+    monkeypatch.setattr(app, "st", SimpleNamespace(session_state=state))
+    monkeypatch.setattr(app, "setting", lambda key, default="": PASSWORD)
+    # A nonempty synthetic credentials marker; never connect to a real Sheet.
+    monkeypatch.setattr(app, "private_sheet_config", lambda: ("test-sheet", {"test": True}))
+    with patch.object(pilot, "sheet_load", return_value=[saved]) as read_sheet:
+        rows = app.load_private_history()
+        assert {row["id"] for row in rows} == {saved["id"], pending["id"]}
+        assert "driver_authenticated" not in state
+        assert app.load_private_history() == rows
+        read_sheet.assert_called_once()
+    restored = pilot.csv_restore(pilot.csv_backup(rows))
+    assert {row["id"] for row in restored} == {saved["id"], pending["id"]}
+
+
+@pytest.mark.parametrize("access", ["legacy", "expired", "rotated"])
+def test_history_loader_rejects_invalid_access_and_clears_cached_rows(monkeypatch, access):
+    state = {"sheet_shift_rows": [{"id": "private"}],
+             "unsynced_shift_rows": [{"id": "pending"}]}
+    if access == "legacy":
+        state["driver_authenticated"] = True
+    else:
+        auth.authorize(state, PASSWORD, now=100)
+    configured = PASSWORD + "-rotated" if access == "rotated" else PASSWORD
+    monkeypatch.setattr(auth.time, "time", lambda: 100 + auth.IDLE_SECONDS
+                        if access == "expired" else 101)
+    monkeypatch.setattr(app, "st", SimpleNamespace(session_state=state))
+    monkeypatch.setattr(app, "setting", lambda key, default="": configured)
+    with patch.object(pilot, "sheet_load") as read_sheet:
+        assert app.load_private_history() == []
+        read_sheet.assert_not_called()
+    assert "sheet_shift_rows" not in state
+    assert "unsynced_shift_rows" not in state
+    assert auth.PRIVATE_SESSION_KEY not in state
 
 
 def test_legacy_boolean_alone_does_not_unlock_any_data():
@@ -124,3 +167,4 @@ def test_private_results_login_and_logout_without_real_sheet_access():
         next(b for b in at.button if b.label == "Lock").click().run()
         assert not at.exception
         assert any("Locked" == x.value for x in at.markdown)
+

@@ -2,6 +2,7 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
 import sys
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -10,6 +11,64 @@ from streamlit.testing.v1 import AppTest
 
 import app
 import gridwise_import as gridwise
+
+
+@pytest.mark.parametrize("header,first,second", [
+    ("Date,Service,Earnings", "2022-07-01,Uber Eats,22.5",
+     "2022-07-01,Uber Eats,22.50"),
+    ("Date,Hours,Miles,Rate,Deduction", "2022-07-01,2,10,62.5,6.25",
+     "2022-07-01,2.00,10.0,62.50,6.250"),
+    ("Date,Service,Earnings", "2022-07-01,Uber Eats,0",
+     "2022-07-01,Uber Eats,-0.00"),
+])
+def test_numeric_formatting_does_not_change_archive_identity(header, first, second):
+    a = gridwise.parse_gridwise_csv(f"{header}\n{first}\n".encode())["rows"][0]
+    b = gridwise.parse_gridwise_csv(f"{header}\n{second}\n".encode())["rows"][0]
+    assert a["row_key"] == b["row_key"]
+    assert a["source_id"] != b["source_id"]
+
+
+@pytest.mark.parametrize("header,line,numeric_fields", [
+    ("Date,Service,Trips,Earnings", "2022-07-01,Uber Eats,2,22.50",
+     ("trips", "earnings")),
+    ("Date,Hours,Miles,Rate,Deduction", "2022-07-01,2.00,10.00,62.50,6.250",
+     ("hours", "miles", "deduction_rate", "tax_deduction")),
+])
+def test_legacy_archive_dedupe_preserves_records_and_repeated_transactions(
+        monkeypatch, header, line, numeric_fields):
+    rows = gridwise.parse_gridwise_csv(
+        f"{header}\n{line}\n{line}\n".encode())["rows"]
+    assert rows[0]["row_key"] != rows[1]["row_key"]
+    legacy = {**rows[0], "row_key": "existing-pre-fix-key", "source_id": "old-source"}
+    # gspread returns numeric cell values, not necessarily their original text.
+    for field in numeric_fields:
+        legacy[field] = float(legacy[field])
+    original = deepcopy(legacy)
+
+    class Archive:
+        def __init__(self):
+            self.records = [legacy]
+        def get_all_records(self):
+            return deepcopy(self.records)
+        def append_rows(self, values, value_input_option=None):
+            assert value_input_option == "RAW"
+            self.records.extend(dict(zip(gridwise.ARCHIVE_COLUMNS, row)) for row in values)
+
+    sheet = Archive()
+    monkeypatch.setattr(gridwise, "archive_sheet", lambda credentials, sheet_id: sheet)
+    # One old transaction is skipped; the second identical occurrence is real.
+    assert gridwise.archive_append_new({}, "test-sheet", rows) == (1, 1)
+    assert gridwise.archive_append_new({}, "test-sheet", rows) == (0, 2)
+    assert sheet.records[0] == original
+    assert len(sheet.records) == 2
+
+
+def test_archive_identity_keeps_missing_values_and_distinct_amounts_separate():
+    rows = gridwise.parse_gridwise_csv(
+        b"Date,Service,Trips,Earnings\n2022-07-01,Uber Eats,,22.50\n"
+        b"2022-07-01,Uber Eats,0,22.50\n2022-07-01,Uber Eats,0,22.51\n"
+    )["rows"]
+    assert len({row["row_key"] for row in rows}) == 3
 
 
 def test_gridwise_earnings_pdf_parses_zero_trip_adjustments_and_tips(monkeypatch):
@@ -153,3 +212,4 @@ def test_results_view_has_no_feeds_or_manual_grading_until_advanced():
         assert any("Import Gridwise reports" in x.label for x in at.expander)
         assert ef.call_count == 1
         assert wf.call_count == 1
+
