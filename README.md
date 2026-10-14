@@ -92,7 +92,9 @@ Gridwise Earnings/Mileage PDFs or tabular CSVs. The app reads the uploaded files
 **in server memory** and displays a summary and first 25 structured rows. It
 requires explicit approval before appending normalized rows to a new,
 **separate private** Google Sheet tab named **Gridwise_Archive**. Duplicate
-natural rows in repeat imports are skipped. It does not store the original
+natural rows in repeat imports are skipped, including equivalent numeric formats
+such as `22.5` and `22.50`. Existing archive records and keys are preserved;
+this does not remove duplicates already saved. It does not store the original
 uploaded PDFs or alter your existing Shifts/Decisions tabs.
 
 The parser supports the column/row format of your **2022 sample PDFs** and
@@ -262,3 +264,4 @@ python -m pytest -q
 ```
 
 Tests cover time-aware Ogbuefi greetings, graphite styling, three-workspace navigation, hidden feed diagnostics, no unnecessary event/weather fetching in Earnings & Fuel, remaining-window and next-step boundaries, gas-price/profit math, NWS/events, officially confirmed kickoff updates, chronological roadmaps and offline Streamlit rendering. Smart-game Saturday 3:30 PM split shifts, preference overrides, TBD/away fallback, early-kickoff behavior and toolbar config are regression-tested.
+

@@ -100,6 +100,20 @@ def _base(report_type, row):
     return output
 
 
+def _natural_row(row):
+    """Canonical values, including legacy Sheet numbers, without changing records."""
+    normalized = _base(row["report_type"], row)
+    for field in ("trips", "earnings", "hours", "miles", "deduction_rate",
+                  "tax_deduction"):
+        value = normalized[field]
+        if value != "":
+            normalized[field] = ("0" if Decimal(value) == 0 else
+                                 value.rstrip("0").rstrip(".") if "." in value
+                                 else value)
+    return "|".join(str(normalized.get(field, "")) for field in ARCHIVE_COLUMNS
+                    if field not in ("row_key", "source_id", "cohort"))
+
+
 def _finalize(raw_rows, report_type, contents):
     if not raw_rows:
         raise ValueError("No supported Gridwise data rows were found")
@@ -112,8 +126,7 @@ def _finalize(raw_rows, report_type, contents):
         row = _base(report_type, raw)
         # Duplicate identical transactions within one report are preserved by
         # ordinal, while re-importing that report is idempotent.
-        natural = "|".join(str(row.get(field, "")) for field in ARCHIVE_COLUMNS
-                           if field not in ("row_key", "source_id", "cohort"))
+        natural = _natural_row(row)
         seen[natural] += 1
         row["row_key"] = hashlib.sha256(
             (natural + "|" + str(seen[natural])).encode("utf-8")
@@ -295,10 +308,20 @@ def archive_append_new(credentials, sheet_id, rows):
     if len(rows) > MAX_ROWS:
         raise ValueError("Too many archive rows")
     sheet = archive_sheet(credentials, sheet_id)
-    existing = {str(row.get("row_key")) for row in sheet.get_all_records()}
-    new = [row for row in rows if str(row["row_key"]) not in existing]
+    # Old row keys encoded decimal formatting. Compare normalized values and
+    # occurrence counts so legacy rows stay untouched and identical legitimate
+    # transactions within one report retain their multiplicity.
+    existing = Counter(_natural_row(row) for row in sheet.get_all_records())
+    seen = Counter()
+    new = []
+    for row in rows:
+        natural = _natural_row(row)
+        seen[natural] += 1
+        if seen[natural] > existing[natural]:
+            new.append(row)
     if new:
         sheet.append_rows(
             [[str(row.get(k, "")) for k in ARCHIVE_COLUMNS] for row in new],
             value_input_option="RAW")
     return len(new), len(rows) - len(new)
+

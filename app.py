@@ -1401,7 +1401,7 @@ def private_sheet_config():
 
 def load_private_history():
     """Only an authenticated session may read the optional private Google Sheet."""
-    if not st.session_state.get("driver_authenticated"):
+    if not private_session_active():
         return []
     if "sheet_shift_rows" not in st.session_state:
         sheet_id, credentials = private_sheet_config()
@@ -1822,3 +1822,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
