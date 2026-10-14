@@ -560,7 +560,7 @@ def fetch_weather(day):
         name, (lat, lon) = point
         try:
             properties = get(f"https://api.weather.gov/points/{lat},{lon}").json()["properties"]
-            forecast_url = properties["forecast"]
+            forecast_url = properties["forecastHourly"]
             if urlparse(forecast_url).hostname != "api.weather.gov":
                 raise ValueError("Unexpected forecast host")
             payload = get(forecast_url).json()["properties"]
@@ -781,7 +781,9 @@ def render_weather(weather, *, details=True):
     else:
         values = f"Forecast {temp}°F"
         if outlook["high"] is not None and outlook["low"] is not None:
-            values += f'<small>Forecast high {outlook["high"]}° · low {outlook["low"]}°</small>'
+            values += (f'<small>Work-hour range {outlook["low"]}–{outlook["high"]}°F</small>'
+                       if weather.get("work_scoped") else
+                       f'<small>Forecast high {outlook["high"]}° · low {outlook["low"]}°</small>')
         else:
             values += '<small>Selected forecast period</small>'
         temp_html = '<span class="pilot-weather-temp">' + escape(values.split("<small>")[0])
@@ -794,6 +796,8 @@ def render_weather(weather, *, details=True):
     st.markdown(
         '<div class="pilot-weather-card pilot-weather-' + escape(severity) + '" role="status">'
         '<div class="pilot-weather-kicker">WEATHER DRIVING OUTLOOK</div>'
+        + ('<div class="pilot-weather-source">' + escape(weather["window_label"])
+           + '</div>' if weather.get("work_scoped") else '') +
         '<div class="pilot-weather-head">'
         '<div><div class="pilot-weather-label">' + escape(outlook["icon"]) + " "
         + escape(outlook["title"]) + '</div>'
@@ -801,7 +805,10 @@ def render_weather(weather, *, details=True):
         + temp_html + '</div>'
         '<div class="pilot-weather-forecast">' + escape(period_title + outlook["forecast"]) + '</div>'
         '<div class="pilot-weather-note">' + escape(outlook["note"]) + '</div>'
-        '<div class="pilot-weather-source">' + escape(place + "NWS forecast · selected driving date")
+        '<div class="pilot-weather-source">' + escape(place + (
+            "NWS hourly · temperature at highlighted hour" if weather.get("work_scoped")
+            else "NWS forecast · selected driving date"))
+        + ('<br>' + escape(weather["window_note"]) if weather.get("work_scoped") else '')
         + '</div></div>',
         unsafe_allow_html=True,
     )
@@ -1291,6 +1298,12 @@ def render_driving_card(slot, step):
             st.write(slot["action"])
 
 
+def game_plan_preferences(selected_date):
+    return st.session_state.get("game_plan_preferences", {}).get(
+        selected_date.isoformat(), {"smart_game_day": True,
+                                   "stop_buffer_minutes": 45, "return_after_hours": 2.0})
+
+
 def render_drive_workspace(selected_date, now, events_data, weather, base):
     """One-glance driving decision; no offer-entry tools or earnings forms."""
     events = events_data["events"]
@@ -1302,7 +1315,7 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
                "opportunistic. Your offer goal: $" +
                f"{OFFER_TARGET_DOLLARS_PER_MILE:g}/mile using estimated total "
                "miles, including pickup/unpaid miles.")
-    render_weather(weather, details=False)
+    weather_card = st.empty()
 
     home_game = next((ev for ev in events if selected_date.weekday() in (5, 6)
                       and is_confirmed_michigan_home_game(ev)), None)
@@ -1310,14 +1323,21 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
         include_events = st.checkbox("Include major-event demand + traffic cues", value=True,
                                      help="Published events affect the brief; not guaranteed earnings.")
         include_local = st.checkbox("Include school-area traffic cues", value=True)
-        smart_game_day = home_game is not None
-        stop_buffer = 45
-        return_delay = 2.0
+        preferences = game_plan_preferences(selected_date)
+        smart_game_day = home_game is not None and preferences["smart_game_day"]
+        stop_buffer = preferences["stop_buffer_minutes"]
+        return_delay = preferences["return_after_hours"]
         if home_game is not None:
-            smart_game_day = st.checkbox("Use Michigan game-day split shift", value=True)
+            smart_game_day = st.checkbox("Use Michigan game-day split shift", value=smart_game_day,
+                                         key=f"split_{selected_date}")
             if smart_game_day:
-                stop_buffer = st.slider("Stop before kickoff (minutes)", 30, 60, 45, 15)
-                return_delay = st.slider("Return after kickoff (hours)", 1.0, 4.0, 2.0, 0.5)
+                stop_buffer = st.slider("Stop before kickoff (minutes)", 30, 60, stop_buffer, 15,
+                                       key=f"stop_{selected_date}")
+                return_delay = st.slider("Return after kickoff (hours)", 1.0, 4.0, return_delay, 0.5,
+                                        key=f"return_{selected_date}")
+            st.session_state.setdefault("game_plan_preferences", {})[selected_date.isoformat()] = {
+                "smart_game_day": smart_game_day, "stop_buffer_minutes": stop_buffer,
+                "return_after_hours": return_delay}
 
     schedule = generate_schedule(
         events, base, selected_date.weekday(),
@@ -1325,6 +1345,9 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
         smart_game_day=smart_game_day, stop_buffer_minutes=stop_buffer,
         return_after_hours=return_delay)
     drive_plan = filter_roadmap(schedule, "Driving")
+    weather = weather_ui.weather_for_work(weather, drive_plan, selected_date, now)
+    with weather_card.container():
+        render_weather(weather, details=False)
     headline = planning_headline(drive_plan, selected_date, now)
     next_step = headline["slot"]
     context_events = [event for event in events if
@@ -1418,7 +1441,10 @@ def render_events_workspace(selected_date, events_data, weather):
         if not local:
             st.caption("No matching local events; school calendar coverage may be incomplete.")
 
-    render_weather(weather, details=True)
+    plan = generate_schedule(events_data["events"], BASE, selected_date.weekday(),
+                             **game_plan_preferences(selected_date))
+    scoped_weather = weather_ui.weather_for_work(weather, plan, selected_date, datetime.now(TZ))
+    render_weather(scoped_weather, details=True)
     with st.expander("Advanced · Feed diagnostics", expanded=False):
         st.caption("Troubleshooting only. Not needed for normal driving decisions.")
         st.dataframe(events_data["coverage"], hide_index=True, use_container_width=True)
