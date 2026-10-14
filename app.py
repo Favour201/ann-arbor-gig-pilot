@@ -31,6 +31,16 @@ import gridwise_import as gridwise
 import session_security as security
 
 MPG = 16.0
+OFFER_TARGET_DOLLARS_PER_MILE = 3.0  # Driver preference, not a predicted rate.
+
+
+def offer_target_guidance():
+    """A preference for live offer decisions; never inferred from event calendars."""
+    return ("Personal goal: at least $" + f"{OFFER_TARGET_DOLLARS_PER_MILE:g} "
+            "per estimated total mile, counting pickup and likely unpaid miles. "
+            "If offers fall short, waiting or heading home is valid.")
+
+
 TZ = ZoneInfo("America/New_York")
 BASE = "2100 Arbor Circle E"
 USER_AGENT = "WashtenawGigPilot/2.0 (https://github.com/Favour201/ann-arbor-gig-pilot)"
@@ -624,12 +634,13 @@ def game_day_blocks(event, base_camp, *, stop_buffer_minutes=45, return_after_ho
     signal = event_impact(event)
     blocks = [
         {"time": window(pre_start, pre_end), "app": "Delivery",
-         "title": "Recommended pregame drive",
+         "title": "Pregame · delivery first",
          "action": f"Suggested start from {base_camp}: drive roughly three hours before the "
-                   f"{clock(kickoff)} Michigan kickoff. Finish around {clock(pre_end)} "
-                   "and avoid stadium approaches as arrivals peak. "
-                   f"Traffic: {signal['traffic']} "
-                   "Use actual delivery/rideshare offers to decide whether to drive.",
+                   f"{clock(kickoff)} Michigan kickoff. Focus on Uber Eats or DoorDash "
+                   "deliveries; keep Uber Comfort/XL available only for worthwhile rides. "
+                   f"Finish around {clock(pre_end)} and avoid stadium approaches as arrivals peak. "
+                   f"Traffic: {signal['traffic']} " + offer_target_guidance() + " "
+                   "Check real offers before leaving; event crowds do not guarantee orders.",
          "_minute": minute(pre_start), "_end_minute": minute(pre_end)},
         {"time": window(pre_end, return_at), "app": "Break / Reset",
          "title": "Head home & recharge",
@@ -639,12 +650,15 @@ def game_day_blocks(event, base_camp, *, stop_buffer_minutes=45, return_after_ho
     ]
     if return_at < midnight:
         blocks.append(
-            {"time": f"{clock(return_at)} onward", "app": "XL / Comfort",
-             "title": "Recommended return shift",
-             "action": f"Consider restarting around {clock(return_at)} for dinner delivery and "
-                       "potential rideshare requests. Monitor game progress, traffic, "
-                       "actual trip offers and legal pickup areas. "
-                       "Continue only while trips remain worthwhile; no surge is guaranteed.",
+            {"time": f"{clock(return_at)} onward", "app": "Delivery",
+             "title": "Optional return · delivery first",
+             "action": f"Reassess around {clock(return_at)} after your break. "
+                       "Prioritize Uber Eats / DoorDash deliveries; Uber Comfort/XL "
+                       "rides are optional, not the reason to reposition. "
+                       "Check game progress, actual offers, traffic and legal pickup areas. "
+                       + offer_target_guidance() + " "
+                       "Only restart or continue if the offers justify it; "
+                       "no surge is guaranteed.",
              "_minute": minute(return_at), "_end_minute": minute(return_end)})
     return blocks
 
@@ -663,10 +677,18 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
     elif day_of_week == 3:
         timeline.extend([
             {"time": "6:00 PM – 8:30 PM", "app": "Delivery",
-             "action": "Thursday dinner: consider compact Carpenter / Washtenaw restaurant loops; target $2.50 per mile.",
+             "action": "Thursday dinner: consider compact Carpenter / Washtenaw delivery loops. "
+                       "Uber Eats / DoorDash are the primary options; "
+                       "keep Uber Comfort/XL available for worthwhile requests. "
+                       + offer_target_guidance(),
              "_minute": 18 * 60, "_end_minute": 20 * 60 + 30},
-            {"time": "8:30 PM onward", "app": "XL / Comfort",
-             "action": "Check actual app demand around South U / Packard before repositioning.",
+            {"time": "8:30 PM onward", "app": "Delivery",
+             "title": "Optional continuation · delivery first",
+             "action": "8:30 PM is a checkpoint, not a required switch to rideshare. "
+                       "Continue worthwhile Uber Eats / DoorDash deliveries if available; "
+                       "Comfort/XL rides are opportunistic. Check actual app offers "
+                       "before driving toward South U / Packard. "
+                       + offer_target_guidance(),
              "_minute": 20 * 60 + 30, "_end_minute": 24 * 60},
         ])
     else:
@@ -674,14 +696,22 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
         timeline.append({
             "time": "4:30 PM – 9:30 PM" if is_sunday else "5:00 PM – 8:00 PM",
             "app": "Delivery",
-            "action": f"Start from {base_camp}. Favor short Carpenter / Washtenaw loops and account for unpaid return miles.",
+            "action": f"Start from {base_camp}. Prioritize Uber Eats / DoorDash deliveries "
+                      "on short Carpenter / Washtenaw loops. Uber Comfort/XL can stay on "
+                      "for an especially worthwhile offer. " + offer_target_guidance(),
             "_minute": 16 * 60 + 30 if is_sunday else 17 * 60,
             "_end_minute": 21 * 60 + 30 if is_sunday else 20 * 60,
         })
         if day_of_week in (4, 5):
             timeline.append({
-                "time": "8:00 PM onward", "app": "XL / Comfort",
-                "action": "Check downtown demand and legal pickup locations before moving; premiums are not guaranteed.",
+                "time": "8:00 PM onward", "app": "Delivery",
+                "title": "Optional continuation · delivery first",
+                "action": "8 PM is a decision point, not a required shift or automatic "
+                          "switch to rideshare. Keep taking worthwhile deliveries on "
+                          "Uber Eats / DoorDash; consider Comfort/XL only for good actual "
+                          "offers. Check downtown traffic and legal pickup locations "
+                          "before repositioning. " + offer_target_guidance() + " "
+                          "Otherwise head home; no premium or demand is guaranteed.",
                 "_minute": 20 * 60, "_end_minute": 24 * 60,
             })
 
@@ -1156,6 +1186,10 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
     st.subheader("Your driving plan")
     st.caption(selected_date.strftime("%A, %B %d, %Y") +
                " · Optional opportunities, not guaranteed demand")
+    st.caption("Delivery-first · Uber Eats / DoorDash. Comfort / XL rides are "
+               "opportunistic. Your offer goal: $" +
+               f"{OFFER_TARGET_DOLLARS_PER_MILE:g}/mile using estimated total "
+               "miles, including pickup/unpaid miles.")
     render_weather(weather, details=False)
 
     home_game = next((ev for ev in events if selected_date.weekday() in (5, 6)

@@ -52,7 +52,8 @@ def test_thursday_keeps_football_and_minutes():
     ev = app.event_record('Michigan Football', 'Michigan Stadium', '2026-10-15T15:30:00-04:00', None, 'Test')
     slots = app.generate_schedule([ev], app.BASE, 3)
     assert any(s['time'] == '12:30 PM – 3:30 PM' for s in slots)
-    assert any(s['app'] == 'XL / Comfort' for s in slots)
+    assert any(s['app'] == 'Delivery' and 'Optional continuation' in s.get('title', '')
+               for s in slots)
 
 
 def test_profit():
@@ -379,13 +380,54 @@ def test_saturday_330_game_recommends_drive_rest_and_return():
     assert [x["time"] for x in slots] == [
         "12:30 PM – 2:45 PM", "2:45 PM – 5:30 PM", "5:30 PM onward"]
     assert [app.roadmap_title(x) for x in slots] == [
-        "Recommended pregame drive", "Head home & recharge", "Recommended return shift"]
-    assert [x["app"] for x in slots] == ["Delivery", "Break / Reset", "XL / Comfort"]
+        "Pregame · delivery first", "Head home & recharge",
+        "Optional return · delivery first"]
+    assert [x["app"] for x in slots] == ["Delivery", "Break / Reset", "Delivery"]
+    assert "Uber Eats / DoorDash" in slots[2]["action"]
+    assert "Comfort/XL" in slots[2]["action"]
+    assert "$3 per estimated total mile" in slots[2]["action"]
+    assert "not the reason to reposition" in slots[2]["action"]
     assert "2100 Arbor Circle E" in slots[1]["action"]
     assert "no surge is guaranteed" in slots[2]["action"].lower()
     assert [x["start_minute"] for x in slots] == sorted(x["start_minute"] for x in slots)
     assert len(app.filter_roadmap(slots, "Driving")) == 3
     assert app.filter_roadmap(slots, "Traffic & events") == []
+
+
+def test_friday_and_saturday_after_dinner_are_optional_delivery_not_forced_xl():
+    for weekday in (4, 5):
+        slots = app.filter_roadmap(app.generate_schedule([], app.BASE, weekday), "Driving")
+        assert [x["time"] for x in slots] == ["5:00 PM – 8:00 PM", "8:00 PM onward"]
+        assert [x["app"] for x in slots] == ["Delivery", "Delivery"]
+        assert app.roadmap_title(slots[0]) == "Delivery window"
+        assert app.roadmap_title(slots[1]) == "Optional continuation · delivery first"
+        assert "not a required shift" in slots[1]["action"]
+        assert "Uber Eats / DoorDash" in slots[1]["action"]
+        assert "Comfort/XL" in slots[1]["action"]
+        assert "$3 per estimated total mile" in slots[1]["action"]
+        assert "Otherwise head home" in slots[1]["action"]
+        assert slots[1]["end_minute"] == 1440
+
+
+def test_thursday_old_two_fifty_target_replaced_by_three_dollars():
+    slots = app.filter_roadmap(app.generate_schedule([], app.BASE, 3), "Driving")
+    assert [x["app"] for x in slots] == ["Delivery", "Delivery"]
+    assert slots[1]["time"] == "8:30 PM onward"
+    assert app.roadmap_title(slots[1]) == "Optional continuation · delivery first"
+    assert all("$2.50" not in x["action"] for x in slots)
+    assert all("$3 per estimated total mile" in x["action"] for x in slots)
+
+
+def test_offer_target_is_guidance_not_predicted_demand_or_new_control():
+    assert app.OFFER_TARGET_DOLLARS_PER_MILE == 3.0
+    rule = app.offer_target_guidance()
+    assert "Personal goal" in rule
+    assert "pickup and likely unpaid miles" in rule
+    assert "waiting or heading home" in rule
+    weekday = app.generate_schedule([], app.BASE, 0)
+    assert len(weekday) == 1
+    assert "$3 per estimated total mile" in weekday[0]["action"]
+    assert weekday[0]["app"] == "Delivery"
 
 
 def test_game_day_preference_can_adjust_stop_time_and_return():
