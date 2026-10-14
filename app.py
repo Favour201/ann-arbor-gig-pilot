@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time, timedelta
 from html import escape
 import json
+import importlib
 import math
 import os
 import re
@@ -1298,6 +1299,24 @@ def render_driving_card(slot, step):
             st.write(slot["action"])
 
 
+def work_weather_for_plan(weather, plan, selected_date, now):
+    """Recover an older module retained by a running Streamlit process."""
+    global weather_ui
+    scope_weather = getattr(weather_ui, "weather_for_work", None)
+    if not callable(scope_weather):
+        try:
+            weather_ui = importlib.reload(weather_ui)
+        except (ImportError, OSError):
+            pass  # A rolling update can temporarily leave the module unavailable.
+        scope_weather = getattr(weather_ui, "weather_for_work", None)
+    if callable(scope_weather):
+        return scope_weather(weather, plan, selected_date, now)
+    # Never fall back to the old whole-day forecast while code is updating.
+    return {**weather, "places": [], "hazards": [], "work_scoped": True,
+            "window_label": "Work-hour weather is updating",
+            "window_note": "Refresh shortly. If this persists, reboot the app in Streamlit Cloud."}
+
+
 def game_plan_preferences(selected_date):
     return st.session_state.get("game_plan_preferences", {}).get(
         selected_date.isoformat(), {"smart_game_day": True,
@@ -1345,7 +1364,7 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
         smart_game_day=smart_game_day, stop_buffer_minutes=stop_buffer,
         return_after_hours=return_delay)
     drive_plan = filter_roadmap(schedule, "Driving")
-    weather = weather_ui.weather_for_work(weather, drive_plan, selected_date, now)
+    weather = work_weather_for_plan(weather, drive_plan, selected_date, now)
     with weather_card.container():
         render_weather(weather, details=False)
     headline = planning_headline(drive_plan, selected_date, now)
@@ -1443,7 +1462,7 @@ def render_events_workspace(selected_date, events_data, weather):
 
     plan = generate_schedule(events_data["events"], BASE, selected_date.weekday(),
                              **game_plan_preferences(selected_date))
-    scoped_weather = weather_ui.weather_for_work(weather, plan, selected_date, datetime.now(TZ))
+    scoped_weather = work_weather_for_plan(weather, plan, selected_date, datetime.now(TZ))
     render_weather(scoped_weather, details=True)
     with st.expander("Advanced · Feed diagnostics", expanded=False):
         st.caption("Troubleshooting only. Not needed for normal driving decisions.")

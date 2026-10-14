@@ -244,6 +244,13 @@ lookups according to their existing caches.
 
 Weather cache: 15 minutes. Events: 30 minutes. Requests are bounded and independent sources run concurrently. Refresh happens on rerun/interaction or via **Refresh live sources**, not through a background scheduler. GasBuddy opens externally and is not part of the refresh cache.
 
+During a code update, an existing Streamlit process can retain an older imported
+weather module. The app reloads it if the work-hour helper is missing. If the
+update is still incomplete, the dashboard stays usable and shows weather as
+unavailable rather than using the old whole-day forecast. If **Work-hour weather
+is updating** persists after refreshing, reboot the app through Streamlit
+Community Cloud. A browser refresh alone does not restart the server process.
+
 ## Check local gas prices
 
 Use the on-page GasBuddy links to search in Ann Arbor or Ypsilanti. GasBuddy may permit a device-location search from its app or website, but the preset links themselves are city-based rather than exact home-address coordinates. The prefilled search parameters are convenience links; if GasBuddy ignores the search, enter a city or ZIP code there. GasBuddy is a third-party community-reported source and may show stale or incorrect prices. **Only the price you type manually** is used for calculations. No external browser-storage plugin or API key is needed.
