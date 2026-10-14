@@ -635,6 +635,7 @@ def game_day_blocks(event, base_camp, *, stop_buffer_minutes=45, return_after_ho
     signal = event_impact(event)
     blocks = [
         {"time": window(pre_start, pre_end), "app": "Delivery",
+         "plan_phase": "pregame",
          "title": "Pregame · delivery first",
          "action": f"Suggested start from {base_camp}: drive roughly three hours before the "
                    f"{clock(kickoff)} Michigan kickoff. Focus on Uber Eats or DoorDash "
@@ -644,6 +645,7 @@ def game_day_blocks(event, base_camp, *, stop_buffer_minutes=45, return_after_ho
                    "Check real offers before leaving; event crowds do not guarantee orders.",
          "_minute": minute(pre_start), "_end_minute": minute(pre_end)},
         {"time": window(pre_end, return_at), "app": "Break / Reset",
+         "plan_phase": "rest",
          "title": "Head home & recharge",
          "action": f"Suggested break: return toward {base_camp}, eat or rest, and "
                    "avoid stadium congestion. Check live conditions before going back out.",
@@ -652,6 +654,7 @@ def game_day_blocks(event, base_camp, *, stop_buffer_minutes=45, return_after_ho
     if return_at < midnight:
         blocks.append(
             {"time": f"{clock(return_at)} onward", "app": "Delivery",
+              "plan_phase": "return",
              "title": "Optional return · delivery first",
              "action": f"Reassess around {clock(return_at)} after your break. "
                        "Prioritize Uber Eats / DoorDash deliveries; Uber Comfort/XL "
@@ -678,12 +681,14 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
     elif day_of_week == 3:
         timeline.extend([
             {"time": "6:00 PM – 8:30 PM", "app": "Delivery",
+              "plan_phase": "dinner",
              "action": "Thursday dinner: consider compact Carpenter / Washtenaw delivery loops. "
                        "Uber Eats / DoorDash are the primary options; "
                        "keep Uber Comfort/XL available for worthwhile requests. "
                        + offer_target_guidance(),
              "_minute": 18 * 60, "_end_minute": 20 * 60 + 30},
             {"time": "8:30 PM onward", "app": "Delivery",
+              "plan_phase": "continuation",
              "title": "Optional continuation · delivery first",
              "action": "8:30 PM is a checkpoint, not a required switch to rideshare. "
                        "Continue worthwhile Uber Eats / DoorDash deliveries if available; "
@@ -697,6 +702,7 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
         timeline.append({
             "time": "4:30 PM – 9:30 PM" if is_sunday else "5:00 PM – 8:00 PM",
             "app": "Delivery",
+            "plan_phase": "dinner",
             "action": f"Start from {base_camp}. Prioritize Uber Eats / DoorDash deliveries "
                       "on short Carpenter / Washtenaw loops. Uber Comfort/XL can stay on "
                       "for an especially worthwhile offer. " + offer_target_guidance(),
@@ -706,6 +712,7 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
         if day_of_week in (4, 5):
             timeline.append({
                 "time": "8:00 PM onward", "app": "Delivery",
+                "plan_phase": "continuation",
                 "title": "Optional continuation · delivery first",
                 "action": "8 PM is a decision point, not a required shift or automatic "
                           "switch to rideshare. Keep taking worthwhile deliveries on "
@@ -748,6 +755,13 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
                else f"{event['tier']} · demand + traffic advisory")
         timeline.append({"time": label, "app": tag, "action": action,
                          "_minute": sort_at, "_end_minute": end_at})
+    for slot in timeline:
+        if "plan_phase" in slot:
+            slot["plan_basis"] = (
+                f"Adjusted for confirmed Michigan kickoff ({clock(featured_game['start'])}). "
+                "Suggested timing, not measured demand."
+                if featured_game is not None else
+                "Usual dinner plan. Scheduled timing, not measured demand.")
     timeline.sort(key=lambda item: (item["_minute"] is None,
                                    item["_minute"] if item["_minute"] is not None else 10**9,
                                    item["app"]))
@@ -836,7 +850,7 @@ def filter_roadmap(slots, view="All", *, selected_date=None, now=None, remaining
         return filtered
     minute = now.astimezone(TZ).hour * 60 + now.astimezone(TZ).minute
     return [slot for slot in filtered
-            if slot["end_minute"] is None or slot["end_minute"] >= minute]
+            if slot["end_minute"] is None or slot["end_minute"] > minute]
 
 
 def next_planning_window(slots, selected_date, now):
@@ -844,6 +858,38 @@ def next_planning_window(slots, selected_date, now):
     remaining = filter_roadmap(slots, selected_date=selected_date,
                                now=now, remaining=True)
     return next((slot for slot in remaining if slot["start_minute"] is not None), None)
+
+
+def planning_headline(slots, selected_date, now):
+    """Describe the plan's current phase without implying verified demand."""
+    local_now = now.astimezone(TZ)
+    if selected_date < local_now.date():
+        return {"title": "Past plan · review only", "slot": None,
+                "basis": "", "note": "Choose today or a future date to plan driving."}
+    slot = next_planning_window(filter_roadmap(slots, "Driving"), selected_date, now)
+    if slot is None:
+        return {"title": "No more planned windows today" if selected_date == local_now.date()
+                else "No timed windows planned", "slot": None, "basis": "",
+                "note": "The schedule does not tell us whether offers are available."}
+    start = datetime.combine(selected_date, time.min, tzinfo=TZ) + timedelta(
+        minutes=slot["start_minute"])
+    active = selected_date == local_now.date() and start <= local_now
+    phase = slot.get("plan_phase")
+    if slot["app"] == "Break / Reset":
+        title = "Rest now" if active else f"Rest starts at {clock(start)}"
+        note = "Take a break. Reassess offers, traffic and weather before any optional return."
+    elif phase in ("return", "continuation"):
+        label = "Optional return" if phase == "return" else "Optional continuation"
+        title = label if active else f"{label} at {clock(start)}"
+        note = "Continue only if actual offers and conditions justify it; heading home is fine."
+    else:
+        label = "Pregame window" if phase == "pregame" else (
+            "Dinner window" if phase == "dinner" else "Driving window")
+        title = f"{label} is open" if active else f"{label} starts at {clock(start)}"
+        note = "Check actual offers, traffic and road conditions before leaving."
+    return {"title": title, "slot": slot,
+            "basis": slot.get("plan_basis", "Suggested schedule, not measured demand."),
+            "note": note}
 
 
 def roadmap_title(slot):
@@ -1279,8 +1325,8 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
         smart_game_day=smart_game_day, stop_buffer_minutes=stop_buffer,
         return_after_hours=return_delay)
     drive_plan = filter_roadmap(schedule, "Driving")
-    next_step = next_planning_window(drive_plan, selected_date, now) \
-        if selected_date >= now.date() else None
+    headline = planning_headline(drive_plan, selected_date, now)
+    next_step = headline["slot"]
     context_events = [event for event in events if
                       (event["tier"] != "NEIGHBORHOOD / SCHOOL" and include_events) or
                       (event["tier"] == "NEIGHBORHOOD / SCHOOL" and include_local)]
@@ -1294,15 +1340,14 @@ def render_drive_workspace(selected_date, now, events_data, weather, base):
     st.session_state["review_context"] = decision_context
 
     with st.container(border=True):
-        st.caption("NEXT PLANNED OPPORTUNITY")
+        st.caption("YOUR PLAN")
+        st.markdown(f"**{headline['title']}**")
         if next_step:
-            st.markdown(f"**{roadmap_title(next_step)}**")
             st.markdown(
                 f'<span class="pilot-timeline-time">{escape(next_step["time"])}</span>',
                 unsafe_allow_html=True)
-            st.caption("Check actual offers, traffic and road conditions before leaving.")
-        else:
-            st.caption("No future driving windows available for this selected date.")
+            st.caption(headline["basis"])
+        st.caption(headline["note"])
 
     if home_game and smart_game_day:
         st.caption(f"Michigan kickoff: {clock(home_game['start'])}. "

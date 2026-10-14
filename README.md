@@ -199,6 +199,17 @@ return shifts, optional game-day timing sliders, NWS warnings, and the current
 traffic-caution summary are retained. There is no gas form, feed table or sprawling
 event list on this first screen.
 
+The existing **Your plan** card distinguishes an upcoming or open dinner/pregame
+window, **Rest now**, and **Optional return/continuation**. End times are exclusive:
+at the start of a rest or continuation phase, the previous window is finished.
+The card explains whether timing comes from the usual dinner schedule or an
+adjustment around a confirmed Michigan kickoff. Neither basis proves demand.
+Future dates never say a window is open now; past dates are labeled for review.
+Planning phases refresh when the app reruns or you interact, not on a background timer.
+
+See [the development plan](DEVELOPMENT_PLAN.md) for the next four weeks of
+usage-led improvements and the criteria for expanding the product.
+
 The top **Workspace** switch moves between:
 
 - **Drive:** recommendations first, optional "Adjust driving plan" controls and a
