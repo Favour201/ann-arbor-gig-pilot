@@ -78,12 +78,16 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # Fail after 5 minutes instead of hanging; the push still goes out (see notify).
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          timeout: 300000
 
+  # The push doesn't depend on Pages: if deploy failed, it's sent without the link.
   notify:
-    needs: deploy
-    if: inputs.mode == 'push'
+    needs: [build, deploy]
+    if: always() && inputs.mode == 'push' && needs.build.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -100,12 +104,17 @@ jobs:
       - name: Send push
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          PAGE_DEPLOYED: ${{ needs.deploy.result == 'success' }}
         run: python -m brief --mode send --push-file push.json
 
-  # If any job failed on a push run, say so instead of staying silent.
+  # If any job failed or timed out on a push run, say so instead of staying silent.
   alert:
     needs: [build, deploy, notify]
-    if: failure() && inputs.mode == 'push'
+    # A timed-out job reports "cancelled", not "failure", so check each result.
+    if: >-
+      always() && inputs.mode == 'push' &&
+      (needs.build.result != 'success' || needs.deploy.result != 'success' ||
+       needs.notify.result != 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -118,7 +127,7 @@ jobs:
           python3 - <<'PY'
           import json, os, urllib.request
           body = json.dumps({"topic": os.environ["NTFY_TOPIC"], "title": "Gig brief failed",
-                             "message": "Today's brief didn't build, deploy or send. Check the run.",
+                             "message": "Part of today's brief failed (build, page or push). Check the run.",
                              "tags": ["rotating_light"], "priority": 4,
                              "click": os.environ["RUN_URL"]}).encode()
           req = urllib.request.Request("https://ntfy.sh", data=body,
