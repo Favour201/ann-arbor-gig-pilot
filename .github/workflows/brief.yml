@@ -1,0 +1,36 @@
+name: Driving brief
+# PR 1: manual dry-run only. Prints the brief to the job log; no page, no push,
+# no secrets. Page deploy, ntfy push and the schedule arrive in later PRs.
+on:
+  workflow_dispatch:
+    inputs:
+      now:
+        description: "Optional 'now' override, e.g. 2026-11-07T15:15 (America/New_York)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: brief
+  cancel-in-progress: false
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-brief.txt
+      - name: Install brief dependencies
+        run: pip install -r requirements-brief.txt
+      - name: Build brief (dry run)
+        env:
+          NOW: ${{ inputs.now }}
+        run: |
+          if [ -n "$NOW" ]; then python -m brief --mode dry-run --now "$NOW"; else python -m brief --mode dry-run; fi
