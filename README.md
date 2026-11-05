@@ -16,6 +16,12 @@
 > On GitHub: Actions → **Driving brief** → Run workflow → mode `dry-run`,
 > `page` (deploy to GitHub Pages) or `push` (deploy, then notify the phone).
 >
+> **Schedule:** Thu–Sun at 3:15 PM New York time the brief deploys the page and
+> pushes to the phone; every morning (~6 AM) it refreshes the page and deploys
+> only if the content changed. GitHub cron is UTC, so the workflow lists the
+> 3:15 slot for both EDT and EST and `brief/gate.py` runs only the one that
+> matches today's offset.
+>
 > Public output only: events, weather and the plan. Shifts start and end at
 > "home"; no address, earnings or other private data goes through `brief/`.
 

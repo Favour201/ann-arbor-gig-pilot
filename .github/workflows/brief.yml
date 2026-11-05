@@ -1,9 +1,16 @@
 name: Driving brief
-# Manual runs only for now; the schedule (with DST gating) arrives in a later PR.
-#   dry-run: print the brief and the push it would send. Nothing published.
-#   page:    build and deploy the GitHub Pages site.
-#   push:    page, then send today's push (linking to the fresh page).
+# Scheduled:
+#   Thu-Sun 3:15 PM New York time: build, deploy the page, push to the phone.
+#     Cron is UTC with no DST, so there is one line for EDT and one for EST;
+#     brief/gate.py lets through only the line that matches today's offset.
+#   Daily ~6 AM: refresh the page; deploy only if what it says changed.
+# Manual (Run workflow):
+#   dry-run prints only; page deploys the site; push deploys and notifies.
 on:
+  schedule:
+    - cron: "15 19 * * 0,4,5,6"   # 3:15 PM EDT (UTC-4)
+    - cron: "15 20 * * 0,4,5,6"   # 3:15 PM EST (UTC-5)
+    - cron: "40 10 * * *"         # 6:40 AM EDT / 5:40 AM EST, page refresh
   workflow_dispatch:
     inputs:
       mode:
@@ -28,10 +35,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      publish: ${{ steps.mode.outputs.publish }}
+      mode: ${{ steps.gate.outputs.mode }}
+      publish: ${{ steps.build.outputs.publish }}
     steps:
-      - id: mode
-        run: echo "publish=${{ inputs.mode != 'dry-run' }}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -40,13 +46,22 @@ jobs:
           cache-dependency-path: requirements-brief.txt
       - name: Install brief dependencies
         run: pip install -r requirements-brief.txt
+      - name: Decide what this run does
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_MODE: ${{ inputs.mode }}
+        run: python -m brief.gate
       - name: Look up the Pages address
         id: pages
-        if: steps.mode.outputs.publish == 'true'
+        if: contains(fromJSON('["page","push","refresh"]'), steps.gate.outputs.mode)
         uses: actions/configure-pages@v5
       - name: Build brief
+        id: build
+        if: steps.gate.outputs.mode != 'skip'
         env:
-          MODE: ${{ steps.mode.outputs.publish == 'true' && 'page' || 'dry-run' }}
+          MODE: ${{ steps.gate.outputs.mode == 'refresh' && 'refresh' || (steps.gate.outputs.mode == 'dry-run' && 'dry-run' || 'page') }}
           NOW: ${{ inputs.now }}
           PAGE_URL: ${{ steps.pages.outputs.base_url && format('{0}/', steps.pages.outputs.base_url) || '' }}
         run: |
@@ -54,12 +69,12 @@ jobs:
           if [ -n "$NOW" ]; then args+=(--now "$NOW"); fi
           python -m brief "${args[@]}"
       - name: Upload site
-        if: steps.mode.outputs.publish == 'true'
+        if: steps.build.outputs.publish == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
       - name: Keep the push for after deploy
-        if: steps.mode.outputs.publish == 'true'
+        if: steps.gate.outputs.mode == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: push
@@ -87,7 +102,7 @@ jobs:
   # The push doesn't depend on Pages: if deploy failed, it's sent without the link.
   notify:
     needs: [build, deploy]
-    if: always() && inputs.mode == 'push' && needs.build.result == 'success'
+    if: always() && needs.build.outputs.mode == 'push' && needs.build.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -111,8 +126,13 @@ jobs:
   alert:
     needs: [build, deploy, notify]
     # A timed-out job reports "cancelled", not "failure", so check each result.
+    # A scheduled push run whose build died before the gate ran has no mode
+    # output; alert for those too (the 3:15 slots are the push crons).
     if: >-
-      always() && inputs.mode == 'push' &&
+      always() &&
+      (needs.build.outputs.mode == 'push' || inputs.mode == 'push' ||
+       (github.event_name == 'schedule' && github.event.schedule != '40 10 * * *' &&
+        needs.build.outputs.mode == '')) &&
       (needs.build.result != 'success' || needs.deploy.result != 'success' ||
        needs.notify.result != 'success')
     runs-on: ubuntu-latest
