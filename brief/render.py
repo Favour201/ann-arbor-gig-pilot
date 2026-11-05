@@ -4,7 +4,10 @@ One self-contained file (inline CSS, a few lines of JS for the staleness
 banner), mobile-first, graphite palette from the legacy app. Every string from
 a feed is HTML-escaped. Public data only.
 """
+from hashlib import sha256
 from html import escape
+import json
+import re
 
 from .text import day_label
 
@@ -47,7 +50,7 @@ footer{margin-top:18px}
 
 STALE_JS = """
 (function(){var g=Date.parse(document.body.dataset.generated);if(!g)return;
-var h=(Date.now()-g)/36e5;if(h<20)return;var el=document.getElementById('stale');
+var h=(Date.now()-g)/36e5;if(h<30)return;var el=document.getElementById('stale');
 el.textContent='This brief is '+Math.round(h)+' hours old. The scheduled update may have stopped; check the Actions tab.';
 el.style.display='block';})();
 """
@@ -125,6 +128,37 @@ def _sources_html(s):
             f'not when the source last changed.</p>{"".join(rows)}{extra}</details>')
 
 
+HASH_META = re.compile(r'<meta name="brief-content" content="([0-9a-f]{16})">')
+
+
+def content_key(brief):
+    """Fingerprint of what the page says, ignoring when it was generated or checked.
+
+    Used by the morning refresh to skip redeploying an unchanged page. The page
+    shows "today + 4 days", so a new day always changes it.
+    """
+    days = []
+    for d in brief["days"]:
+        wx = d["weather"]
+        days.append({
+            "date": d["date"].isoformat(), "skip": d["skip"], "game": d["game_day"],
+            "windows": [(w["time"], w["title"], w["optional"]) for w in d["windows"]],
+            "weather": wx and (wx["severity"], wx["forecast"], wx["temperature"], wx["note"]),
+            "events": [(e["time"], e["name"], e["venue"]) for e in d["events"]],
+            "complete": d["events_complete"],
+        })
+    sources = [(s["source"], s["ok"], s.get("reason", ""), [x.isoformat() for x in s["missing_days"]])
+               for s in brief["sources"]["events"]]
+    sources += [(p["place"], p["ok"]) for p in brief["sources"]["weather"]]
+    blob = json.dumps({"days": days, "sources": sources}, sort_keys=True, default=str)
+    return sha256(blob.encode()).hexdigest()[:16]
+
+
+def live_content_key(html):
+    match = HASH_META.search(html or "")
+    return match.group(1) if match else ""
+
+
 def render_page(brief):
     generated = brief["generated"]
     days = "\n".join(_day_html(d, i == 0) for i, d in enumerate(brief["days"]))
@@ -132,6 +166,7 @@ def render_page(brief):
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<meta name="brief-content" content="{content_key(brief)}">
 <title>Gig brief · {escape(day_label(brief["days"][0]["date"]))}</title>
 <style>{CSS}</style></head>
 <body data-generated="{escape(generated.isoformat())}"><main>
