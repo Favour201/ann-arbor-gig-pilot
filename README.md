@@ -1,5 +1,20 @@
 # Washtenaw Gig Pilot Pro
 
+> **In progress: Gig Pilot Brief (`brief/`).** A scheduled GitHub Actions job
+> that builds a pushed driving brief and a static GitHub Pages page, replacing
+> the Streamlit app below. `brief/` is self-contained and imports nothing from
+> the legacy files at the repo root, which are frozen until the brief proves
+> itself (or is retired). Try it locally:
+>
+> ```sh
+> pip install -r requirements-brief.txt
+> python -m brief --mode dry-run                      # live sources, today + 4 days
+> python -m brief --mode dry-run --now 2026-11-07T15:15
+> ```
+>
+> Public output only: events, weather and the plan. Shifts start and end at
+> "home"; no address, earnings or other private data goes through `brief/`.
+
 Graphite Pilot is a mobile-first Streamlit driver command center for Ogbuefi, operating a 16 MPG Kia Telluride in the Ann Arbor / Ypsilanti corridor. Application logic stays in `app.py`.
 
 ## Run
