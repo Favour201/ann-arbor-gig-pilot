@@ -10,7 +10,11 @@
 > pip install -r requirements-brief.txt
 > python -m brief --mode dry-run                      # live sources, today + 4 days
 > python -m brief --mode dry-run --now 2026-11-07T15:15
+> python -m brief --mode page --out site               # writes site/index.html + push.json
 > ```
+>
+> On GitHub: Actions → **Driving brief** → Run workflow → mode `dry-run`,
+> `page` (deploy to GitHub Pages) or `push` (deploy, then notify the phone).
 >
 > Public output only: events, weather and the plan. Shifts start and end at
 > "home"; no address, earnings or other private data goes through `brief/`.
