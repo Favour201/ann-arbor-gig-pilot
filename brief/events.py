@@ -480,6 +480,18 @@ def _run_job(job, days):
     return events, covered
 
 
+def failure_reason(exc, limit=160):
+    """Short, public-safe reason a source failed (shown in logs and on the page)."""
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        return f"HTTP {exc.response.status_code}"
+    if isinstance(exc, requests.Timeout):
+        return "Timed out"
+    if isinstance(exc, requests.ConnectionError):
+        return "Connection failed"
+    text = " ".join(str(exc).split())
+    return (f"{type(exc).__name__}: {text}" if text else type(exc).__name__)[:limit]
+
+
 def fetch_events(days, extra_json="[]"):
     """Fetch every source once for the whole range. Never raises for a bad source."""
     jobs, notes = source_jobs(extra_json)
@@ -490,11 +502,11 @@ def fetch_events(days, extra_json="[]"):
             events, covered = _run_job(job, days)
             events = [{**e, "feed": name} for e in events]
             return events, {"source": name, "url": url, "ok": True, "covered": tuple(covered),
-                            "checked": datetime.now(TZ)}
+                            "checked": datetime.now(TZ), "reason": ""}
         except (requests.RequestException, ValueError, TypeError, KeyError, AttributeError,
-                IndexError, ImportError):
+                IndexError, ImportError) as exc:
             return [], {"source": name, "url": url, "ok": False, "covered": (),
-                        "checked": datetime.now(TZ)}
+                        "checked": datetime.now(TZ), "reason": failure_reason(exc)}
 
     events, coverage = [], []
     with ThreadPoolExecutor(max_workers=6) as pool:
