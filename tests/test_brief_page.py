@@ -76,3 +76,17 @@ def test_page_mode_writes_site_and_push_then_send_reads_it(tmp_path, monkeypatch
     monkeypatch.setattr(entry, "send_ntfy", lambda p, topic: sent.append((p, topic)) or 200)
     assert entry.main(["--mode", "send", "--push-file", str(push_file)], env={"NTFY_TOPIC": "gp-x"}) == 0
     assert sent == [(push, "gp-x")]
+
+
+def test_send_without_deployed_page_drops_link_and_says_so(tmp_path, monkeypatch):
+    import brief.__main__ as entry
+    push = {"title": "Thu Nov 5 · Gig brief", "message": "x", "priority": 3, "tags": ["car"],
+            "click": "https://favour201.github.io/ann-arbor-gig-pilot/"}
+    path = tmp_path / "push.json"
+    path.write_text(json.dumps(push))
+    sent = []
+    monkeypatch.setattr(entry, "send_ntfy", lambda p, topic: sent.append(p) or 200)
+    entry.main(["--mode", "send", "--push-file", str(path)], env={"NTFY_TOPIC": "t", "PAGE_DEPLOYED": "false"})
+    entry.main(["--mode", "send", "--push-file", str(path)], env={"NTFY_TOPIC": "t", "PAGE_DEPLOYED": "true"})
+    assert sent[0]["click"] == "" and sent[0]["title"].endswith("(page not updated)")
+    assert sent[1] == push

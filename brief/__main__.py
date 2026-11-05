@@ -42,6 +42,11 @@ def write_site(brief, out_dir):
     return out / "index.html"
 
 
+def without_page(push):
+    """Pages failed to deploy: still send the brief, but don't link to a stale page."""
+    return {**push, "click": "", "title": push["title"] + " (page not updated)"}
+
+
 def send(push, env):
     try:
         send_ntfy(push, env.get("NTFY_TOPIC", ""))
@@ -62,6 +67,8 @@ def main(argv=None, env=os.environ):
 
     if args.mode == "send":
         push = json.loads(Path(args.push_file).read_text(encoding="utf-8"))
+        if env.get("PAGE_DEPLOYED", "true") != "true":
+            push = without_page(push)
         print(render_push(push))
         return send(push, env)
 
