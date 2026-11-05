@@ -1,9 +1,15 @@
 name: Driving brief
-# PR 1: manual dry-run only. Prints the brief to the job log; no page, no push,
-# no secrets. Page deploy, ntfy push and the schedule arrive in later PRs.
+# Manual runs only for now; the schedule (with DST gating) arrives in a later PR.
+#   dry-run: print the brief and the push it would send. No secrets used.
+#   push:    same, then send today's push to ntfy (NTFY_TOPIC secret).
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "dry-run prints only; push also sends to your phone"
+        type: choice
+        options: [dry-run, push]
+        default: dry-run
       now:
         description: "Optional 'now' override, e.g. 2026-11-07T15:15 (America/New_York)"
         required: false
@@ -17,7 +23,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  dry-run:
+  brief:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -29,8 +35,30 @@ jobs:
           cache-dependency-path: requirements-brief.txt
       - name: Install brief dependencies
         run: pip install -r requirements-brief.txt
-      - name: Build brief (dry run)
+      - name: Build brief
         env:
+          MODE: ${{ inputs.mode || 'dry-run' }}
           NOW: ${{ inputs.now }}
+          NTFY_TOPIC: ${{ inputs.mode == 'push' && secrets.NTFY_TOPIC || '' }}
         run: |
-          if [ -n "$NOW" ]; then python -m brief --mode dry-run --now "$NOW"; else python -m brief --mode dry-run; fi
+          args=(--mode "$MODE")
+          if [ -n "$NOW" ]; then args+=(--now "$NOW"); fi
+          python -m brief "${args[@]}"
+      # If anything above failed on a push run, say so instead of staying silent.
+      - name: Alert on failure
+        if: failure() && inputs.mode == 'push'
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -n "$NTFY_TOPIC" ] || exit 0
+          python - <<'PY'
+          import json, os, urllib.request
+          body = json.dumps({"topic": os.environ["NTFY_TOPIC"], "title": "Gig brief failed",
+                             "message": "Today's brief didn't build or send. Check the run.",
+                             "tags": ["rotating_light"], "priority": 4,
+                             "click": os.environ["RUN_URL"]}).encode()
+          req = urllib.request.Request("https://ntfy.sh", data=body,
+                                       headers={"Content-Type": "application/json"})
+          urllib.request.urlopen(req, timeout=10)
+          PY
