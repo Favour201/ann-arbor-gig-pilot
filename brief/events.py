@@ -54,7 +54,8 @@ def classify(venue, name=""):
         return "YPSI GAME DAY"
     if any(x in venue for x in ("crisler", "yost")):
         return "INDOOR ARENA"
-    if any(x in venue for x in ("hill auditorium", "michigan theater", "michigan theatre", "state theatre", "state theater")):
+    if any(x in venue for x in ("hill auditorium", "michigan theater", "michigan theatre", "state theatre", "state theater",
+                                "rackham auditorium", "power center", "lydia mendelssohn")):
         return "PERFORMING ARTS"
     return "NEIGHBORHOOD / SCHOOL"
 
@@ -436,12 +437,86 @@ def parse_school_calendar(html, days, school, source):
     return events, covered
 
 
+UMS_DATE = re.compile(rf"(?P<month>{MONTH_NAME})\s+(?P<day>\d{{1,2}}),\s*(?P<year>20\d{{2}})"
+                      r"(?:\s+(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*(?P<meridiem>AM|PM))?", re.I)
+
+
+def parse_ums_season(html, days):
+    """Season list -> [(title, url)] for single-date listings that fall in the window.
+
+    Listings show only a date; time and venue are on each performance page.
+    Multi-day ranges (livestreams, exhibits) are skipped: they don't move crowds.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    blocks = soup.select(".event_block .right_content_block")
+    if not blocks:
+        raise ValueError("No recognizable UMS season listings")
+    wanted = []
+    for block in blocks:
+        link = block.find("a", href=True)
+        if not link:
+            continue
+        title, href = link.get_text(" ", strip=True), link["href"]
+        for extra in block.select(".block_bottom_quick, .quick_look, a"):
+            if not extra.decomposed:
+                extra.decompose()
+        date_text = block.get_text(" ", strip=True)
+        if " - " in date_text or "livestream" in title.lower():
+            continue
+        match = UMS_DATE.search(date_text)
+        if not match:
+            continue
+        try:
+            listed = date(int(match.group("year")),
+                          datetime.strptime(match.group("month").title(), "%B").month, int(match.group("day")))
+        except ValueError:
+            continue
+        if listed in days:
+            wanted.append((title, href))
+    return wanted
+
+
+def parse_ums_performance(html, title, url, days):
+    """Performance page -> events at local venues, with the published time (or TBD)."""
+    soup = BeautifulSoup(html, "html.parser")
+    venue_node = soup.select_one(".right_venue")
+    dates_node = soup.select_one(".mobile_dates") or soup.select_one(".perf_date_venue_title_mobile")
+    if not venue_node or not dates_node:
+        raise ValueError("UMS performance page structure changed")
+    venue_full = venue_node.get_text(" ", strip=True)
+    venue_name = next(iter(venue_node.stripped_strings), venue_full)
+    if not in_corridor(venue_full) and not in_corridor(venue_name):
+        return []
+    venue = f"{venue_name}, Ann Arbor" if "ann arbor" in venue_full.lower() else venue_name
+    events = []
+    for match in UMS_DATE.finditer(dates_node.get_text(" ", strip=True)):
+        day = date(int(match.group("year")), datetime.strptime(match.group("month").title(), "%B").month,
+                   int(match.group("day")))
+        if day not in days:
+            continue
+        timed = bool(match.group("hour"))
+        start = date_from_match(match, day, "%B") if timed else local_dt(day)
+        events.append(event_record(title, venue, start, None, "UMS", url, all_day=not timed))
+    return events
+
+
+def fetch_ums(days, season_url):
+    events = []
+    for title, url in parse_ums_season(get(season_url).text, days):
+        if not safe_url(url) or not url.startswith("https://ums.org/"):
+            continue
+        events.extend(parse_ums_performance(get(url).text, title, url, days))
+    return events
+
+
 # ----------------------------------------------------------------- the fetch
 # Known gaps, listed on the brief so "no events" is never read as full coverage.
 # The A2 school calendars (Finalsite) load their events with JavaScript after the
 # page arrives, and refuse non-browser clients (HTTP 406); parse_school_calendar is
 # kept for a future iCal feed.
 NOT_COVERED = (
+    "U-M campus calendar (events.umich.edu): refuses GitHub's servers (HTTP 403). "
+    "Hill Auditorium, Rackham and Power Center shows come from UMS instead.",
     "A2 school calendars (Pioneer / Huron / Skyline concerts, plays, ceremonies): "
     "events load only in a browser, so the brief can't read them.",
 )
@@ -449,7 +524,7 @@ NOT_COVERED = (
 
 def source_jobs(extra_json="[]"):
     """(name, format, url, detail) for every source, plus validation notes."""
-    jobs = [("U-M campus / Hill Auditorium", "umich", "https://events.umich.edu/", None)]
+    jobs = [("UMS (Hill / Rackham / Power Center)", "ums", "https://ums.org/season/", None)]
     for school, host, sports in [
         ("Michigan", "mgoblue.com", ("football", "mens-basketball", "womens-basketball", "mens-ice-hockey", "womens-gymnastics")),
         ("EMU", "emueagles.com", ("football", "mens-basketball", "womens-basketball", "womens-volleyball", "womens-soccer", "womens-gymnastics", "baseball")),
@@ -486,6 +561,8 @@ def _run_job(job, days):
     elif fmt == "eventlink":
         events = parse_eventlink_events(
             get(url, params={"from": days[0].isoformat(), "to": days[-1].isoformat()}).text, days, detail, url)
+    elif fmt == "ums":
+        events = fetch_ums(days, url)
     elif fmt == "school-calendar":
         events, covered = parse_school_calendar(get(url).text, days, detail, url)
     else:

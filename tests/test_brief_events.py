@@ -142,6 +142,11 @@ def test_horizon_is_consecutive_and_crosses_month():
     assert ev.horizon(date(2026, 11, 28), 5)[-1] == date(2026, 12, 2)
 
 
+UMS_SEASON_OUT_OF_WINDOW = """<div class="event_block"><div class="right_content_block">
+<a href="https://ums.org/performance/later/"><h3><p>Later Show</p></h3></a> Friday, December 4, 2026
+<div class="block_bottom_quick">QUICK LOOK</div></div></div>"""
+
+
 # --------------------------------------------- new: one fetch, bucket by day
 def test_fetch_events_fetches_each_source_once_and_buckets(monkeypatch):
     days = ev.horizon(date(2026, 11, 5), 5)
@@ -156,8 +161,8 @@ def test_fetch_events_fetches_each_source_once_and_buckets(monkeypatch):
 
     def fake_get(url, params=None, **_):
         calls.append(url)
-        if "events.umich.edu" in url:
-            return Resp(data=[])
+        if "ums.org/season" in url:
+            return Resp(UMS_SEASON_OUT_OF_WINDOW)
         if "mgoblue.com/sports/football" in url:
             return Resp(football)
         raise requests.ConnectionError("blocked in test")
@@ -171,7 +176,7 @@ def test_fetch_events_fetches_each_source_once_and_buckets(monkeypatch):
     assert friday["events"] == []
     status = {c["source"]: c for c in saturday["coverage"]}
     assert status["Michigan football"]["status"] == "Checked • 1 matches"
-    assert status["U-M campus / Hill Auditorium"]["verified"]
+    assert status["UMS (Hill / Rackham / Power Center)"]["verified"]
     assert not status["Michigan Theater (Marquee Arts)"]["verified"]
     assert status["Michigan Theater (Marquee Arts)"]["status"].startswith("Not verified")
 
@@ -197,13 +202,13 @@ def test_failure_reason_is_short_and_specific():
 
 def test_fetch_events_records_reason_per_failed_source(monkeypatch):
     def fake_get(url, params=None, **_):
-        if "events.umich.edu" in url:
+        if "ums.org" in url:
             raise requests.ReadTimeout()
         return type("R", (), {"text": "<html>nothing here</html>"})()
     monkeypatch.setattr(ev, "get", fake_get)
     data = ev.fetch_events(ev.horizon(date(2026, 11, 5), 5))
     reasons = {c["source"]: c["reason"] for c in data["coverage"]}
-    assert reasons["U-M campus / Hill Auditorium"] == "Timed out"
+    assert reasons["UMS (Hill / Rackham / Power Center)"] == "Timed out"
     assert reasons["Michigan football"] == "ValueError: Schedule structure changed"
     assert reasons["Pioneer Athletics"] == "ValueError: Athletics listing markup unavailable"
 
@@ -253,5 +258,67 @@ def test_each_request_asks_for_one_content_type(monkeypatch):
         raise requests.ConnectionError()
     monkeypatch.setattr(ev, "get", fake_get)
     ev.fetch_events(ev.horizon(date(2026, 11, 5), 5))
-    assert seen["https://events.umich.edu/list/json"] == "application/json"
+    assert seen["https://ums.org/season/"] is None  # default: HTML
     assert seen["https://mgoblue.com/sports/football/schedule"] is None  # default: HTML
+
+
+# ------------------------------------------------------------------- UMS
+UMS_SEASON = """<div class="event_block"><div class="left_image">img</div>
+<div class="right_content_block clearfix season_listing">
+<a href="https://ums.org/performance/bruce-liu-piano/"><h3><p>Bruce Liu, piano (Livestream)</p></h3></a>
+Wednesday, October 28 - Thursday, December 3, 2026
+<div class="block_bottom_quick"><a class="quick_look_btn">QUICK LOOK</a></div>
+<div class="quick_look">Long description November 8, 2026 mentioned here</div></div></div>
+<div class="event_block"><div class="right_content_block">
+<a href="https://ums.org/performance/escher-quartet-jason-vieaux/"><h3><p>Escher Quartet<br> Jason Vieaux, guitar</p></h3></a>
+Sunday, November 8, 2026
+<div class="block_bottom_quick"><a>EVENT DETAILS</a></div></div></div>
+<div class="event_block"><div class="right_content_block">
+<a href="https://ums.org/performance/mozart-requiem/"><h3><p>Mozart's Requiem</p></h3></a>
+Friday, November 13, 2026</div></div>"""
+
+UMS_PERFORMANCE = """<div class="perf_date_venue_title_mobile row clearfix">
+<div class="mobile_dates">Sunday, November 8, 2026 4:00 PM</div> Rackham Auditorium</div>
+<div class="right_venue">Rackham Auditorium<br>915 East Washington Street<br>Ann Arbor, MI 48109</div>"""
+
+
+def test_ums_season_keeps_single_dates_in_window_and_skips_livestream_ranges():
+    days = ev.horizon(date(2026, 11, 5), 5)
+    assert ev.parse_ums_season(UMS_SEASON, days) == [
+        ("Escher Quartet Jason Vieaux, guitar", "https://ums.org/performance/escher-quartet-jason-vieaux/")]
+    with pytest.raises(ValueError):
+        ev.parse_ums_season("<html>redesigned</html>", days)
+
+
+def test_ums_performance_gives_time_venue_and_tier():
+    days = ev.horizon(date(2026, 11, 5), 5)
+    found = ev.parse_ums_performance(UMS_PERFORMANCE, "Escher Quartet", "https://ums.org/performance/e/", days)
+    assert len(found) == 1
+    show = found[0]
+    assert (show["start"].day, show["start"].hour) == (8, 16) and not show["all_day"]
+    assert show["venue"] == "Rackham Auditorium, Ann Arbor"
+    assert show["tier"] == "PERFORMING ARTS"
+
+
+def test_ums_performance_without_time_stays_tbd():
+    page = UMS_PERFORMANCE.replace(" 4:00 PM", "")
+    found = ev.parse_ums_performance(page, "Show", "https://ums.org/performance/s/", ev.horizon(date(2026, 11, 5), 5))
+    assert found[0]["all_day"] is True
+
+
+def test_fetch_ums_only_follows_ums_links(monkeypatch):
+    fetched = []
+    season = UMS_SEASON.replace("https://ums.org/performance/escher", "https://evil.example/performance/escher")
+    def fake_get(url, **_):
+        fetched.append(url)
+        return type("R", (), {"text": season if "season" in url else UMS_PERFORMANCE})()
+    monkeypatch.setattr(ev, "get", fake_get)
+    assert ev.fetch_ums(ev.horizon(date(2026, 11, 5), 5), "https://ums.org/season/") == []
+    assert fetched == ["https://ums.org/season/"]
+
+
+def test_umich_listed_as_not_covered_and_ums_fetched_instead():
+    names = {name for name, *_ in ev.source_jobs()[0]}
+    assert "UMS (Hill / Rackham / Power Center)" in names
+    assert not any("U-M campus" in n for n in names)
+    assert any("events.umich.edu" in n for n in ev.NOT_COVERED)
