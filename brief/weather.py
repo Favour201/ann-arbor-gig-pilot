@@ -13,10 +13,19 @@ from urllib.parse import urlparse
 import requests
 
 from .config import POINTS, TZ
-from .events import local_dt, overlaps
+from .events import failure_reason, local_dt, overlaps
 from .http import get
 
 COLD_F = 15  # Operational threshold, not an official NWS warning criterion.
+
+
+def forecast_updated(properties):
+    """NWS has used several names for the issue time; take the first present."""
+    for key in ("updateTime", "updated", "generatedAt"):
+        value = properties.get(key)
+        if value:
+            return str(value)
+    return ""
 
 
 def fetch_forecast():
@@ -33,9 +42,10 @@ def fetch_forecast():
             if not isinstance(periods, list):
                 raise ValueError("Unexpected forecast format")
             return {"place": name, "ok": True, "periods": periods, "url": forecast_url,
-                    "updated": payload.get("updated", "")}
-        except (requests.RequestException, ValueError, KeyError, TypeError):
-            return {"place": name, "ok": False, "periods": [], "url": "", "updated": ""}
+                    "updated": forecast_updated(payload), "reason": ""}
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            return {"place": name, "ok": False, "periods": [], "url": "", "updated": "",
+                    "reason": failure_reason(exc)}
     with ThreadPoolExecutor(max_workers=2) as pool:
         places = list(pool.map(run, POINTS.items()))
     return {"places": places, "checked": datetime.now(TZ)}

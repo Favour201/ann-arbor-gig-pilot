@@ -181,3 +181,28 @@ def test_bad_extra_feed_settings_are_noted_not_fatal():
     assert notes and len(jobs) == len(ev.source_jobs()[0])
     _, notes = ev.source_jobs('[{"name": "x", "format": "json", "url": "http://insecure"}]')
     assert notes
+
+
+# ------------------------------------------- failure reasons (diagnostics)
+def test_failure_reason_is_short_and_specific():
+    resp = requests.Response()
+    resp.status_code = 403
+    assert ev.failure_reason(requests.HTTPError(response=resp)) == "HTTP 403"
+    assert ev.failure_reason(requests.ReadTimeout()) == "Timed out"
+    assert ev.failure_reason(requests.ConnectionError("x")) == "Connection failed"
+    assert ev.failure_reason(ValueError("Selected month not visible\nin school calendar")) == \
+        "ValueError: Selected month not visible in school calendar"
+    assert len(ev.failure_reason(ValueError("x" * 500))) == 160
+
+
+def test_fetch_events_records_reason_per_failed_source(monkeypatch):
+    def fake_get(url, params=None, **_):
+        if "events.umich.edu" in url:
+            raise requests.ReadTimeout()
+        return type("R", (), {"text": "<html>nothing here</html>"})()
+    monkeypatch.setattr(ev, "get", fake_get)
+    data = ev.fetch_events(ev.horizon(date(2026, 11, 5), 5))
+    reasons = {c["source"]: c["reason"] for c in data["coverage"]}
+    assert reasons["U-M campus / Hill Auditorium"] == "Timed out"
+    assert reasons["Michigan football"] == "ValueError: Schedule structure changed"
+    assert reasons["Pioneer School Calendar"].startswith("ValueError: Selected month not visible")

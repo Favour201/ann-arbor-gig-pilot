@@ -82,11 +82,11 @@ def build_brief(now, events_data, forecast, *, days=HORIZON_DAYS):
         "days": [build_day(day, now, events_data, forecast) for day in span],
         "sources": {
             "events": [{"source": c["source"], "url": c["url"], "ok": c["ok"],
-                        "checked": c["checked"],
+                        "checked": c["checked"], "reason": c.get("reason", ""),
                         "missing_days": [d for d in span if d not in c["covered"]] if c["ok"] else list(span)}
                        for c in events_data["coverage"]],
             "weather": [{"place": p["place"], "ok": p["ok"], "updated": p["updated"],
-                         "url": p["url"]} for p in forecast["places"]],
+                         "url": p["url"], "reason": p.get("reason", "")} for p in forecast["places"]],
             "weather_checked": forecast["checked"],
             "events_checked": events_data["checked"],
             "notes": events_data["notes"],

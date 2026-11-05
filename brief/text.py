@@ -43,12 +43,13 @@ def render_day(d):
 def render_sources(sources):
     lines = ["== Sources"]
     for p in sources["weather"]:
-        state = f"OK (NWS updated {p['updated'] or 'unknown'})" if p["ok"] else "UNAVAILABLE"
+        state = (f"OK (NWS updated {p['updated'] or 'unknown'})" if p["ok"]
+                 else f"UNAVAILABLE ({p['reason'] or 'unknown reason'})")
         lines.append(f"  NWS hourly · {p['place']}: {state}")
     lines.append(f"  Weather checked {_clock(sources['weather_checked'])}")
     for s in sources["events"]:
         if not s["ok"]:
-            state = "NOT VERIFIED"
+            state = f"NOT VERIFIED ({s['reason'] or 'unknown reason'})"
         elif s["missing_days"]:
             state = "OK, not visible for " + ", ".join(day_label(d) for d in s["missing_days"])
         else:

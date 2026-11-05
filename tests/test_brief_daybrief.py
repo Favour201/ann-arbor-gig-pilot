@@ -103,3 +103,17 @@ def test_weather_for_day_shape_matches_legacy():
     assert {p["status"] for p in sliced["places"]} == {"Available"}
     nxt = weather_for_day(forecast(hourly(NOW.date())), date(2026, 11, 6))
     assert {p["status"] for p in nxt["places"]} == {"Selected date outside available forecast"}
+
+
+def test_nws_update_time_field_fallbacks():
+    from brief.weather import forecast_updated
+    assert forecast_updated({"updateTime": "2026-11-05T15:00:00+00:00"}) == "2026-11-05T15:00:00+00:00"
+    assert forecast_updated({"generatedAt": "g"}) == "g"
+    assert forecast_updated({}) == ""
+
+
+def test_failure_reason_reaches_text():
+    data = events_data(ok=False)
+    data["coverage"][0]["reason"] = "HTTP 403"
+    text = render_text(daybrief.build_brief(NOW, data, forecast(all_days())))
+    assert "Michigan football: NOT VERIFIED (HTTP 403)" in text
