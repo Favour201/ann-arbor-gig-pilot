@@ -17,7 +17,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .config import TZ
-from .http import get, safe_url
+from .http import JSON, get, safe_url
 
 
 # ---------------------------------------------------------------- time helpers
@@ -170,7 +170,7 @@ def parse_sidearm(html, days, school, sport, source):
             opponent = deref(row["opponent"].get("title")) or "Opponent TBD"
             facility = row.get("facility")
             venue = deref(facility.get("title")) if isinstance(facility, dict) else None
-            default_venues = {("Michigan", "football"): "Michigan Stadium", ("Michigan", "ice-hockey"): "Yost Ice Arena",
+            default_venues = {("Michigan", "football"): "Michigan Stadium", ("Michigan", "mens-ice-hockey"): "Yost Ice Arena",
                               ("Michigan", "mens-basketball"): "Crisler Center", ("Michigan", "womens-basketball"): "Crisler Center",
                               ("EMU", "football"): "Rynearson Stadium"}
             venue = venue or default_venues.get((school, sport), row["location"])
@@ -191,7 +191,7 @@ UMICH_MAX_PAGES = 25
 def fetch_umich(days):
     events = []
     for page in range(1, UMICH_MAX_PAGES + 1):
-        rows = get("https://events.umich.edu/list/json", params={
+        rows = get("https://events.umich.edu/list/json", accept=JSON, params={
             "v": 2, "range": f"{days[0]}to{days[-1]}",
             "max-results": UMICH_PAGE_SIZE, "page": page}).json()
         if not isinstance(rows, list):
@@ -346,7 +346,13 @@ def parse_eventlink_events(html, days, school, source):
     if "EVENTS" not in soup.get_text(" ", strip=True).upper():
         raise ValueError("Athletics listing markup unavailable")
     events, recognized = [], 0
-    lines = [v.strip() for v in soup.stripped_strings if v.strip()]
+    # Current markup is a table: one cell each for sport, opponent "(H)/(A)",
+    # date + time (two <p>s) and venue. Joining each cell's text keeps the
+    # date and time together. Older markup had one string per field.
+    cells = soup.select("tr td")
+    lines = ([c.get_text(" ", strip=True) for c in cells] if cells
+             else [v.strip() for v in soup.stripped_strings])
+    lines = [line for line in lines if line]
     for i, line in enumerate(lines):
         match = EVENTLINK_DATE.search(line)
         if not match:
@@ -431,21 +437,28 @@ def parse_school_calendar(html, days, school, source):
 
 
 # ----------------------------------------------------------------- the fetch
+# Known gaps, listed on the brief so "no events" is never read as full coverage.
+# The A2 school calendars (Finalsite) load their events with JavaScript after the
+# page arrives, and refuse non-browser clients (HTTP 406); parse_school_calendar is
+# kept for a future iCal feed.
+NOT_COVERED = (
+    "A2 school calendars (Pioneer / Huron / Skyline concerts, plays, ceremonies): "
+    "events load only in a browser, so the brief can't read them.",
+)
+
+
 def source_jobs(extra_json="[]"):
     """(name, format, url, detail) for every source, plus validation notes."""
     jobs = [("U-M campus / Hill Auditorium", "umich", "https://events.umich.edu/", None)]
     for school, host, sports in [
-        ("Michigan", "mgoblue.com", ("football", "mens-basketball", "womens-basketball", "ice-hockey", "womens-gymnastics")),
-        ("EMU", "emueagles.com", ("football", "mens-basketball", "womens-basketball", "volleyball", "womens-soccer", "gymnastics", "baseball")),
+        ("Michigan", "mgoblue.com", ("football", "mens-basketball", "womens-basketball", "mens-ice-hockey", "womens-gymnastics")),
+        ("EMU", "emueagles.com", ("football", "mens-basketball", "womens-basketball", "womens-volleyball", "womens-soccer", "womens-gymnastics", "baseball")),
     ]:
         for sport in sports:
             jobs.append((school + " " + sport, "sidearm", f"https://{host}/sports/{sport}/schedule", (school, sport)))
     jobs.extend([
         ("Michigan Theater (Marquee Arts)", "marquee", "https://marquee-arts.org/live-events/", None),
         ("Pioneer Athletics", "eventlink", "https://pioneerathletics.net/Events", "Pioneer"),
-        ("Pioneer School Calendar", "school-calendar", "https://pioneer.a2schools.org/calendar", "Pioneer"),
-        ("Huron School Calendar", "school-calendar", "https://huron.a2schools.org/hurondistrict-calendar", "Huron"),
-        ("Skyline School Calendar", "school-calendar", "https://skyline.a2schools.org/calendar", "Skyline"),
     ])
     notes = []
     try:
@@ -518,7 +531,8 @@ def fetch_events(days, extra_json="[]"):
         key = (event["name"].casefold().strip(), event["venue"].casefold().strip(), event["start"])
         unique.setdefault(key, event)
     return {"events": sorted(unique.values(), key=lambda e: (e["start"], e["name"])),
-            "coverage": coverage, "notes": notes, "checked": datetime.now(TZ), "days": tuple(days)}
+            "coverage": coverage, "notes": notes, "not_covered": NOT_COVERED,
+            "checked": datetime.now(TZ), "days": tuple(days)}
 
 
 def events_for_day(data, day):

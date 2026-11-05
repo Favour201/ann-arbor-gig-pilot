@@ -117,3 +117,10 @@ def test_failure_reason_reaches_text():
     data["coverage"][0]["reason"] = "HTTP 403"
     text = render_text(daybrief.build_brief(NOW, data, forecast(all_days())))
     assert "Michigan football: NOT VERIFIED (HTTP 403)" in text
+
+
+def test_known_gaps_are_printed():
+    data = events_data()
+    data["not_covered"] = ("A2 school calendars: events load only in a browser.",)
+    text = render_text(daybrief.build_brief(NOW, data, forecast(all_days())))
+    assert "Not covered: A2 school calendars" in text

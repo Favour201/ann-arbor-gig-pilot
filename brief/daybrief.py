@@ -90,5 +90,6 @@ def build_brief(now, events_data, forecast, *, days=HORIZON_DAYS):
             "weather_checked": forecast["checked"],
             "events_checked": events_data["checked"],
             "notes": events_data["notes"],
+            "not_covered": events_data.get("not_covered", ()),
         },
     }

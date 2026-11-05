@@ -14,7 +14,7 @@ import requests
 
 from .config import POINTS, TZ
 from .events import failure_reason, local_dt, overlaps
-from .http import get
+from .http import GEOJSON, get
 
 COLD_F = 15  # Operational threshold, not an official NWS warning criterion.
 
@@ -33,11 +33,11 @@ def fetch_forecast():
     def run(point):
         name, (lat, lon) = point
         try:
-            properties = get(f"https://api.weather.gov/points/{lat},{lon}").json()["properties"]
+            properties = get(f"https://api.weather.gov/points/{lat},{lon}", accept=GEOJSON).json()["properties"]
             forecast_url = properties["forecastHourly"]
             if urlparse(forecast_url).hostname != "api.weather.gov":
                 raise ValueError("Unexpected forecast host")
-            payload = get(forecast_url).json()["properties"]
+            payload = get(forecast_url, accept=GEOJSON).json()["properties"]
             periods = payload["periods"]
             if not isinstance(periods, list):
                 raise ValueError("Unexpected forecast format")

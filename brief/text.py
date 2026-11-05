@@ -57,6 +57,7 @@ def render_sources(sources):
         lines.append(f"  {s['source']}: {state}")
     lines.append(f"  Events checked {_clock(sources['events_checked'])}")
     lines.extend(f"  Note: {n}" for n in sources["notes"])
+    lines.extend(f"  Not covered: {n}" for n in sources.get("not_covered", ()))
     return "\n".join(lines)
 
 

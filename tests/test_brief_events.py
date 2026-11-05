@@ -205,4 +205,53 @@ def test_fetch_events_records_reason_per_failed_source(monkeypatch):
     reasons = {c["source"]: c["reason"] for c in data["coverage"]}
     assert reasons["U-M campus / Hill Auditorium"] == "Timed out"
     assert reasons["Michigan football"] == "ValueError: Schedule structure changed"
-    assert reasons["Pioneer School Calendar"].startswith("ValueError: Selected month not visible")
+    assert reasons["Pioneer Athletics"] == "ValueError: Athletics listing markup unavailable"
+
+
+# ------------------------------------------- feed fixes from the first live run
+EVENTLINK_TABLE = """<h1>EVENTS 11/5/26 - 11/9/26</h1><table><tbody>
+<tr><td><h4 class="fw-bold my-auto">Hockey (Girls V)</h4></td>
+<td><p class="my-0">Academy of the Sacred Heart <span title="Home Game">(H)</span></p></td>
+<td><p class="m-0">Thu, Nov. 5 2026</p> <p class="m-0">6:00 PM EST</p></td>
+<td><p class="my-0">Pioneer High School (Yost Ice Arena)</p></td><td><a>DETAILS</a></td></tr>
+<tr><td><h4>Hockey (Girls V)</h4></td><td><p>Wash U <span>(A)</span></p></td>
+<td><p>Fri, Nov. 6 2026</p> <p>5:00 PM EST</p></td><td></td><td><a>DETAILS</a></td></tr>
+<tr><td><h4>Cross Country (Boys V)</h4></td><td><p>MHSAA State Finals @ MIS <span>(A)</span></p></td>
+<td><p>Sat, Nov. 7 2026</p> <p>TBD</p></td><td><p>MHSAA State Finals @ MIS</p></td><td><a>DETAILS</a></td></tr>
+</tbody></table>"""
+
+
+def test_eventlink_table_markup_keeps_date_and_time_together():
+    days = ev.horizon(date(2026, 11, 5), 5)
+    found = ev.parse_eventlink_events(EVENTLINK_TABLE, days, "Pioneer", "https://pioneerathletics.net/Events")
+    assert len(found) == 1  # away game with no venue and the out-of-town meet are dropped
+    game = found[0]
+    assert (game["start"].day, game["start"].hour) == (5, 18)
+    assert game["venue"] == "Pioneer High School (Yost Ice Arena)"
+    assert "Hockey (Girls V)" in game["name"] and "Academy of the Sacred Heart (H)" in game["name"]
+
+
+def test_sidearm_slugs_match_current_sites():
+    urls = {url for _, fmt, url, _ in ev.source_jobs()[0] if fmt == "sidearm"}
+    assert "https://mgoblue.com/sports/mens-ice-hockey/schedule" in urls
+    assert "https://emueagles.com/sports/womens-volleyball/schedule" in urls
+    assert "https://emueagles.com/sports/womens-gymnastics/schedule" in urls
+    assert not any(u.endswith(("/ice-hockey/schedule", "/volleyball/schedule", "/gymnastics/schedule"))
+                   and "womens" not in u and "mens-" not in u for u in urls)
+
+
+def test_school_calendars_listed_as_not_covered_instead_of_failing():
+    names = {name for name, *_ in ev.source_jobs()[0]}
+    assert not any("School Calendar" in n for n in names)
+    assert any("school calendars" in n for n in ev.NOT_COVERED)
+
+
+def test_each_request_asks_for_one_content_type(monkeypatch):
+    seen = {}
+    def fake_get(url, params=None, accept=None, **_):
+        seen[url] = accept
+        raise requests.ConnectionError()
+    monkeypatch.setattr(ev, "get", fake_get)
+    ev.fetch_events(ev.horizon(date(2026, 11, 5), 5))
+    assert seen["https://events.umich.edu/list/json"] == "application/json"
+    assert seen["https://mgoblue.com/sports/football/schedule"] is None  # default: HTML
