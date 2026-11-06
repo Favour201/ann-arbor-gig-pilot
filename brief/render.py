@@ -129,6 +129,7 @@ def _sources_html(s):
 
 
 HASH_META = re.compile(r'<meta name="brief-content" content="([0-9a-f]{16})">')
+PUSHED_META = re.compile(r'<meta name="brief-pushed" content="(\d{4}-\d{2}-\d{2})?">')
 
 
 def content_key(brief):
@@ -154,12 +155,18 @@ def content_key(brief):
     return sha256(blob.encode()).hexdigest()[:16]
 
 
+def live_pushed_on(html):
+    """Date (YYYY-MM-DD) of the last push recorded on the deployed page, or ''."""
+    match = PUSHED_META.search(html or "")
+    return (match.group(1) or "") if match else ""
+
+
 def live_content_key(html):
     match = HASH_META.search(html or "")
     return match.group(1) if match else ""
 
 
-def render_page(brief):
+def render_page(brief, pushed_on=""):
     generated = brief["generated"]
     days = "\n".join(_day_html(d, i == 0) for i, d in enumerate(brief["days"]))
     return f"""<!doctype html>
@@ -167,6 +174,7 @@ def render_page(brief):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <meta name="brief-content" content="{content_key(brief)}">
+<meta name="brief-pushed" content="{escape(pushed_on)}">
 <title>Gig brief · {escape(day_label(brief["days"][0]["date"]))}</title>
 <style>{CSS}</style></head>
 <body data-generated="{escape(generated.isoformat())}"><main>

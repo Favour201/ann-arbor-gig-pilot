@@ -67,8 +67,8 @@ def test_refresh_and_manual_modes():
 def test_gate_writes_github_output(tmp_path, capsys):
     out = tmp_path / "out"
     gate.main({"EVENT_NAME": "workflow_dispatch", "INPUT_MODE": "page", "GITHUB_OUTPUT": str(out)})
-    assert out.read_text() == "mode=page\n"
-    assert "mode=page (manual run)" in capsys.readouterr().out
+    assert out.read_text() == "mode=page\nguard=false\n"
+    assert "mode=page guard=false (manual run)" in capsys.readouterr().out
 
 
 # ------------------------------------------------------- refresh: changed?
@@ -101,7 +101,7 @@ def test_refresh_skips_deploy_only_when_live_page_matches(tmp_path, monkeypatch)
         entry.main(["--mode", "refresh", "--now", "2026-11-05T15:15", "--out", str(tmp_path / "site"),
                     "--push-file", str(tmp_path / "push.json")],
                    env={"PAGE_URL": "https://example.github.io/", "GITHUB_OUTPUT": str(out)})
-        return out.read_text()
+        return out.read_text().splitlines()[0] + "\n"
 
     page = lambda html: (lambda url, **_: type("R", (), {"text": html})())
     assert run(page(live)) == "publish=false\n"
@@ -118,4 +118,4 @@ def test_page_mode_always_publishes(tmp_path, monkeypatch):
     out = tmp_path / "gh_output"
     entry.main(["--mode", "page", "--now", "2026-11-05T15:15", "--out", str(tmp_path / "site"),
                 "--push-file", str(tmp_path / "push.json")], env={"GITHUB_OUTPUT": str(out)})
-    assert out.read_text() == "publish=true\n"
+    assert out.read_text().splitlines()[0] == "publish=true"

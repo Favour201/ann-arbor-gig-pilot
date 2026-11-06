@@ -38,8 +38,20 @@ def _windows(slots):
             "phase": slot.get("plan_phase", ""),
             "basis": slot.get("plan_basis", ""),
             "detail": slot["action"],
+            "start_minute": slot.get("start_minute"),
         })
     return windows
+
+
+def push_cutoff_minute(day):
+    """Latest useful time (minutes after midnight) for the afternoon push.
+
+    The first drive window starting at or after 3 PM, but never before 4 PM
+    (so normal GitHub lag is fine); 6 PM when there is no such window.
+    """
+    starts = [w["start_minute"] for w in day["windows"]
+              if w["kind"] == "drive" and w.get("start_minute") is not None and w["start_minute"] >= 15 * 60]
+    return max(min(starts), 16 * 60) if starts else 18 * 60
 
 
 def build_day(day, now, events_data, forecast):

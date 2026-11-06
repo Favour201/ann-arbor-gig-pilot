@@ -3,6 +3,8 @@
 Same honesty rules as the page: weather UNKNOWN is said out loud, missing
 event sources are flagged, no demand/surge/profit claims, no address.
 """
+import re
+
 from .config import OFFER_TARGET_DOLLARS_PER_MILE
 from .text import day_label
 
@@ -50,14 +52,42 @@ def weather_line(day):
     return f"Weather: {wx['icon']} {label}, {wx['forecast'].split(' · ')[0]}{temp}"
 
 
+HIGH_SCHOOLS = ("Pioneer", "Huron", "Skyline")
+SCHOOL_EVENT = re.compile(r"^(?P<school>\w+) • (?P<sport>.+?) \((?P<group>[^)]*)\) • (?P<opp>.+)$")
+
+
+def is_high_school(e):
+    return e["name"].startswith(HIGH_SCHOOLS) or e["venue"].startswith(tuple(f"{s} High" for s in HIGH_SCHOOLS))
+
+
+def short_name(name):
+    """'Pioneer • Hockey (Girls V) • Academy of the Sacred Heart (H)' -> 'Pioneer girls hockey vs Academy of the Sacred Heart'."""
+    match = SCHOOL_EVENT.match(name)
+    if not match:
+        return name
+    group = match.group("group").lower()
+    who = "girls " if "girl" in group else "boys " if "boy" in group else ""
+    opponent = re.sub(r"\s*\((?:H|A|N)\)\s*$", "", match.group("opp"))
+    return f"{match.group('school')} {who}{match.group('sport').lower()} vs {opponent}"
+
+
+def short_venue(venue):
+    inner = re.search(r"\(([^)]+)\)", venue)  # 'Pioneer High School (Yost Ice Arena)' -> 'Yost Ice Arena'
+    venue = inner.group(1) if inner else venue.split(",")[0]
+    return venue.replace(" Center", "").replace(" Ice Arena", "")
+
+
+def event_rank(e):
+    tier = TIER_ORDER.index(e["tier"]) if e["tier"] in TIER_ORDER else 99
+    return (tier, is_high_school(e), e["start"])
+
+
 def _event_short(e):
-    venue = e["venue"].split(",")[0].replace(" Center", "").replace(" Ice Arena", "")
-    return f"{e['name']} {e['time']} ({venue})"
+    return f"{short_name(e['name'])} {e['time']} ({short_venue(e['venue'])})"
 
 
 def events_line(day):
-    ranked = sorted(day["events"], key=lambda e: (TIER_ORDER.index(e["tier"])
-                                                  if e["tier"] in TIER_ORDER else 99, e["start"]))
+    ranked = sorted(day["events"], key=event_rank)
     unverified = "" if day["events_complete"] else " (some sources unverified)"
     if not ranked:
         return "Events: none found" + unverified

@@ -20,7 +20,11 @@
 > pushes to the phone; every morning (~6 AM) it refreshes the page and deploys
 > only if the content changed. GitHub cron is UTC, so the workflow lists the
 > 3:15 slot for both EDT and EST and `brief/gate.py` runs only the one that
-> matches today's offset.
+> matches today's offset. Because GitHub's scheduler can start runs hours late,
+> cron-job.org also starts the 3:15 run on time via the workflow_dispatch API
+> (mode `scheduled-push`). Automatic pushes send at most once a day and never
+> after the evening window has started; Healthchecks.io alerts the phone if no
+> brief went out by ~3:45 PM on a driving day.
 >
 > Public output only: events, weather and the plan. Shifts start and end at
 > "home"; no address, earnings or other private data goes through `brief/`.
