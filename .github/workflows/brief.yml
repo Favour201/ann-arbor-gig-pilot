@@ -4,8 +4,11 @@ name: Driving brief
 #     Cron is UTC with no DST, so there is one line for EDT and one for EST;
 #     brief/gate.py lets through only the line that matches today's offset.
 #   Daily ~6 AM: refresh the page; deploy only if what it says changed.
+#   GitHub's scheduler can run hours late, so the 3:15 push is also started on
+#   time by cron-job.org through the workflow_dispatch API (mode scheduled-push).
+#   Automatic pushes are guarded: at most one per day, never after driving starts.
 # Manual (Run workflow):
-#   dry-run prints only; page deploys the site; push deploys and notifies.
+#   dry-run prints only; page deploys the site; push deploys and always notifies.
 on:
   schedule:
     - cron: "15 19 * * 0,4,5,6"   # 3:15 PM EDT (UTC-4)
@@ -16,7 +19,7 @@ on:
       mode:
         description: "dry-run prints only; page deploys the site; push deploys and notifies"
         type: choice
-        options: [dry-run, page, push]
+        options: [dry-run, page, push, scheduled-push]
         default: dry-run
       now:
         description: "Optional 'now' override, e.g. 2026-11-07T15:15 (America/New_York)"
@@ -37,6 +40,8 @@ jobs:
     outputs:
       mode: ${{ steps.gate.outputs.mode }}
       publish: ${{ steps.build.outputs.publish }}
+      send: ${{ steps.build.outputs.send }}
+      already_sent: ${{ steps.build.outputs.already_sent }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -63,10 +68,14 @@ jobs:
         env:
           MODE: ${{ steps.gate.outputs.mode == 'refresh' && 'refresh' || (steps.gate.outputs.mode == 'dry-run' && 'dry-run' || 'page') }}
           NOW: ${{ inputs.now }}
+          PUSH_RUN: ${{ steps.gate.outputs.mode == 'push' }}
+          GUARD: ${{ steps.gate.outputs.guard }}
           PAGE_URL: ${{ steps.pages.outputs.base_url && format('{0}/', steps.pages.outputs.base_url) || '' }}
         run: |
           args=(--mode "$MODE" --out site --push-file push.json)
           if [ -n "$NOW" ]; then args+=(--now "$NOW"); fi
+          if [ "$PUSH_RUN" = "true" ]; then args+=(--push-run); fi
+          if [ "$GUARD" = "true" ]; then args+=(--guard); fi
           python -m brief "${args[@]}"
       - name: Upload site
         if: steps.build.outputs.publish == 'true'
@@ -74,7 +83,7 @@ jobs:
         with:
           path: site
       - name: Keep the push for after deploy
-        if: steps.gate.outputs.mode == 'push'
+        if: steps.build.outputs.send == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: push
@@ -102,7 +111,7 @@ jobs:
   # The push doesn't depend on Pages: if deploy failed, it's sent without the link.
   notify:
     needs: [build, deploy]
-    if: always() && needs.build.outputs.mode == 'push' && needs.build.result == 'success'
+    if: always() && needs.build.result == 'success' && needs.build.outputs.send == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -122,19 +131,38 @@ jobs:
           PAGE_DEPLOYED: ${{ needs.deploy.result == 'success' }}
         run: python -m brief --mode send --push-file push.json
 
+  # Dead-man check: tell Healthchecks.io that today's brief went out. If no ping
+  # arrives by ~3:45 PM on a driving day, Healthchecks alerts the phone (ntfy).
+  heartbeat:
+    needs: [build, notify]
+    if: >-
+      always() && needs.build.outputs.mode == 'push' &&
+      (needs.notify.result == 'success' || needs.build.outputs.already_sent == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Healthchecks.io
+        env:
+          HC_PING_URL: ${{ secrets.HC_PING_URL }}
+        run: |
+          if [ -z "$HC_PING_URL" ]; then echo "HC_PING_URL not set; skipping."; exit 0; fi
+          curl -fsS -m 10 --retry 3 -o /dev/null "$HC_PING_URL" && echo "Heartbeat sent."
+
   # If any job failed or timed out on a push run, say so instead of staying silent.
   alert:
     needs: [build, deploy, notify]
     # A timed-out job reports "cancelled", not "failure", so check each result.
     # A scheduled push run whose build died before the gate ran has no mode
     # output; alert for those too (the 3:15 slots are the push crons).
+    # A guard skip (already sent / too late) is not a failure.
     if: >-
       always() &&
-      (needs.build.outputs.mode == 'push' || inputs.mode == 'push' ||
+      (needs.build.outputs.mode == 'push' || inputs.mode == 'push' || inputs.mode == 'scheduled-push' ||
        (github.event_name == 'schedule' && github.event.schedule != '40 10 * * *' &&
         needs.build.outputs.mode == '')) &&
-      (needs.build.result != 'success' || needs.deploy.result != 'success' ||
-       needs.notify.result != 'success')
+      (needs.build.result != 'success' ||
+       (needs.build.outputs.publish == 'true' && needs.deploy.result != 'success') ||
+       (needs.build.outputs.send == 'true' && needs.notify.result != 'success'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
