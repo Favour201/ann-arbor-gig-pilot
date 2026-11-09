@@ -64,9 +64,9 @@ def is_guarded(event_name, input_mode):
     return event_name == "schedule" or input_mode == EXTERNAL_MODE
 
 
-def main(env=os.environ):
+def main(env=os.environ, now=None):
     event, mode_in = env.get("EVENT_NAME", ""), env.get("INPUT_MODE", "")
-    mode, reason = decide(event, env.get("SCHEDULE", ""), mode_in)
+    mode, reason = decide(event, env.get("SCHEDULE", ""), mode_in, now=now)
     guard = mode == "push" and is_guarded(event, mode_in)
     print(f"mode={mode} guard={str(guard).lower()} ({reason})")
     if env.get("GITHUB_OUTPUT"):

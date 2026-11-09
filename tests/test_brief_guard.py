@@ -28,9 +28,12 @@ def test_external_scheduler_mode_is_a_guarded_push_on_driving_days_only():
 
 def test_gate_outputs_guard(tmp_path):
     out = tmp_path / "o"
-    gate.main({"EVENT_NAME": "workflow_dispatch", "INPUT_MODE": "scheduled-push", "GITHUB_OUTPUT": str(out)})
-    lines = out.read_text().splitlines()
-    assert lines[1] == "guard=true"
+    env = {"EVENT_NAME": "workflow_dispatch", "INPUT_MODE": "scheduled-push", "GITHUB_OUTPUT": str(out)}
+    gate.main(env, now=ny(2026, 11, 6, 15, 15))  # a Friday; don't depend on today's date
+    assert out.read_text().splitlines() == ["mode=push", "guard=true"]
+    out.write_text("")
+    gate.main(env, now=ny(2026, 11, 9, 15, 15))  # a Monday: external trigger skips, no guard
+    assert out.read_text().splitlines() == ["mode=skip", "guard=false"]
 
 
 # ---------------------------------------------------------------- the guards
