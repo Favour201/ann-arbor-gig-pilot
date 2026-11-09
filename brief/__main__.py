@@ -8,7 +8,7 @@ send:    send a push written earlier by `page` (no fetching). Used after deploy,
 push:    fetch, build and send in one go (handy locally; no page).
 """
 import argparse
-from datetime import datetime
+from datetime import date, datetime
 import json
 import os
 from pathlib import Path
@@ -18,7 +18,8 @@ from .config import HORIZON_DAYS, TZ
 from .daybrief import build_brief
 from .events import fetch_events, horizon
 from .notify import PushError, send_ntfy
-from .push import compose_push
+from . import private
+from .push import add_private_lines, compose_push
 from .http import get
 from .daybrief import push_cutoff_minute
 from .render import content_key, live_content_key, live_pushed_on, render_page
@@ -80,7 +81,17 @@ def set_output(env, **values):
                 out.write(f"{key}={value}\n")
 
 
-def send(push, env):
+def with_private(push, env, load=None):
+    """Add on-call/blocker lines from the private sheet. Logs only the read status."""
+    info = (load or private.load)(env)
+    print(private.log_summary(info))
+    day = date.fromisoformat(push["date"]) if push.get("date") else datetime.now(TZ).date()
+    return add_private_lines(push, private.lines_for(info, day))
+
+
+def send(push, env, load=None):
+    print(render_push(push))  # public part only; private lines are added after this
+    push = with_private(push, env, load)
     try:
         send_ntfy(push, env.get("NTFY_TOPIC", ""))
     except PushError as exc:
@@ -105,7 +116,6 @@ def main(argv=None, env=os.environ):
         push = json.loads(Path(args.push_file).read_text(encoding="utf-8"))
         if env.get("PAGE_DEPLOYED", "true") != "true":
             push = without_page(push)
-        print(render_push(push))
         return send(push, env)
 
     now = parse_now(args.now)
@@ -116,7 +126,8 @@ def main(argv=None, env=os.environ):
 
     print(render_text(brief))
     print()
-    print(render_push(push))
+    if args.mode != "push":
+        print(render_push(push))  # send() prints it in push mode
     if args.mode in ("page", "refresh"):
         live = fetch_live_page(env.get("PAGE_URL", ""))
         pushed_on = live_pushed_on(live)

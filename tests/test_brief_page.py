@@ -75,7 +75,10 @@ def test_page_mode_writes_site_and_push_then_send_reads_it(tmp_path, monkeypatch
     sent = []
     monkeypatch.setattr(entry, "send_ntfy", lambda p, topic: sent.append((p, topic)) or 200)
     assert entry.main(["--mode", "send", "--push-file", str(push_file)], env={"NTFY_TOPIC": "gp-x"}) == 0
-    assert sent == [(push, "gp-x")]
+    # The private sheet isn't configured here, so the push says on-call is unknown.
+    from brief.private import UNSET_LINE
+    from brief.push import add_private_lines
+    assert sent == [(add_private_lines(push, [UNSET_LINE]), "gp-x")]
 
 
 def test_send_without_deployed_page_drops_link_and_says_so(tmp_path, monkeypatch):
@@ -89,4 +92,4 @@ def test_send_without_deployed_page_drops_link_and_says_so(tmp_path, monkeypatch
     entry.main(["--mode", "send", "--push-file", str(path)], env={"NTFY_TOPIC": "t", "PAGE_DEPLOYED": "false"})
     entry.main(["--mode", "send", "--push-file", str(path)], env={"NTFY_TOPIC": "t", "PAGE_DEPLOYED": "true"})
     assert sent[0]["click"] == "" and sent[0]["title"].endswith("(page not updated)")
-    assert sent[1] == push
+    assert sent[1] == {**push, "message": "x\nOn-call: unknown (private sheet not set up)."}

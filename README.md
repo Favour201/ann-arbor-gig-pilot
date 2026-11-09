@@ -27,7 +27,16 @@
 > brief went out by ~3:45 PM on a driving day.
 >
 > Public output only: events, weather and the plan. Shifts start and end at
-> "home"; no address, earnings or other private data goes through `brief/`.
+> "home"; no address, earnings or other private data reaches the page, logs or
+> artifacts (this repo is public, so its Actions logs and artifacts are too).
+>
+> **Private schedule (push only):** on-call weeks and blockers live in the
+> `Schedule` tab of a private Google Sheet (`start_date | end_date | kind | note`,
+> kind `oncall`/`blocker`/`remote`, end date exclusive). The notify job reads it
+> with a read-only service-account token (secrets `GOOGLE_SA_KEY`,
+> `PRIVATE_SHEET_ID`) and adds the lines to the push right before sending; the
+> log shows only whether the read worked. Not set up or unreadable → the push
+> says on-call is unknown.
 
 Graphite Pilot is a mobile-first Streamlit driver command center for Ogbuefi, operating a 16 MPG Kia Telluride in the Ann Arbor / Ypsilanti corridor. Application logic stays in `app.py`.
 

@@ -115,4 +115,24 @@ def compose_push(day, page_url=""):
         "priority": 4 if high else 3,
         "tags": ["warning"] if high else ["car"],
         "click": page_url,
+        "date": day["date"].isoformat(),
     }
+
+
+OFFER_PREFIX = "Offer rule:"
+
+
+def add_private_lines(push, extra):
+    """Add push-only private lines (after the plan line) within MAX_LINES.
+
+    The offer-rule reminder is the first line dropped to make room. Called
+    right before sending; the result must never be logged or saved.
+    """
+    if not extra:
+        return push
+    lines = push["message"].split("\n")
+    at = next((i + 1 for i, line in enumerate(lines) if not line.startswith("⚠")), len(lines))
+    lines[at:at] = extra
+    while len(lines) > MAX_LINES and any(line.startswith(OFFER_PREFIX) for line in lines):
+        lines = [line for line in lines if not line.startswith(OFFER_PREFIX)]
+    return {**push, "message": "\n".join(lines[:MAX_LINES])}
