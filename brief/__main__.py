@@ -20,7 +20,8 @@ from .events import fetch_events, horizon
 from .notify import PushError, send_ntfy
 from .push import compose_push
 from .http import get
-from .render import content_key, live_content_key, render_page
+from .daybrief import push_cutoff_minute
+from .render import content_key, live_content_key, live_pushed_on, render_page
 from .text import render_text
 from .weather import fetch_forecast
 
@@ -36,10 +37,10 @@ def render_push(push):
     return f"--- push: {push['title']} (priority {push['priority']})\n{push['message']}"
 
 
-def write_site(brief, out_dir):
+def write_site(brief, out_dir, pushed_on=""):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "index.html").write_text(render_page(brief), encoding="utf-8")
+    (out / "index.html").write_text(render_page(brief, pushed_on), encoding="utf-8")
     (out / ".nojekyll").write_text("", encoding="utf-8")  # serve files as-is
     return out / "index.html"
 
@@ -49,16 +50,27 @@ def without_page(push):
     return {**push, "click": "", "title": push["title"] + " (page not updated)"}
 
 
-def page_changed(brief, page_url):
-    """Compare with the deployed page. Unknown (fetch failed) counts as changed."""
+def fetch_live_page(page_url):
+    """HTML of the deployed page, or None if there's no URL or it can't be read."""
     if not page_url:
-        return True
+        return None
     try:
-        live = live_content_key(get(page_url, timeout=(4, 10)).text)
-    except Exception as exc:  # noqa: BLE001 - any failure means "deploy to be safe"
-        print(f"Couldn't read the live page ({type(exc).__name__}); deploying.")
-        return True
-    return live != content_key(brief)
+        return get(page_url, timeout=(4, 10)).text
+    except Exception as exc:  # noqa: BLE001 - any failure means "unknown"
+        print(f"Couldn't read the live page ({type(exc).__name__}).")
+        return None
+
+
+def should_send(brief, now, already_pushed_on):
+    """Guard for scheduled pushes: once per day, and not after the window has started."""
+    today = brief["days"][0]
+    if already_pushed_on == today["date"].isoformat():
+        return False, "today's brief was already sent"
+    cutoff = push_cutoff_minute(today)
+    minute = now.hour * 60 + now.minute
+    if minute >= cutoff:
+        return False, f"too late: it's past {cutoff // 60 % 12 or 12}:{cutoff % 60:02d} PM, when driving starts"
+    return True, "on time"
 
 
 def set_output(env, **values):
@@ -84,6 +96,9 @@ def main(argv=None, env=os.environ):
     parser.add_argument("--now", help="Override 'now' (America/New_York if no offset), for testing")
     parser.add_argument("--out", default="site", help="Site directory for --mode page")
     parser.add_argument("--push-file", default="push.json", help="Push JSON written by page, read by send")
+    parser.add_argument("--push-run", action="store_true", help="This page build goes with a push")
+    parser.add_argument("--guard", action="store_true",
+                        help="Scheduled push: skip if already sent today or too late")
     args = parser.parse_args(argv)
 
     if args.mode == "send":
@@ -103,11 +118,23 @@ def main(argv=None, env=os.environ):
     print()
     print(render_push(push))
     if args.mode in ("page", "refresh"):
-        print(f"Wrote {write_site(brief, args.out)}")
+        live = fetch_live_page(env.get("PAGE_URL", ""))
+        pushed_on = live_pushed_on(live)
+        will_send, reason = False, "not a push run"
+        if args.push_run:
+            will_send, reason = should_send(brief, now, pushed_on) if args.guard else (True, "manual push")
+            if will_send:
+                pushed_on = now.date().isoformat()
+        print(f"Push: {'send' if will_send else 'skip'} ({reason})")
+        print(f"Wrote {write_site(brief, args.out, pushed_on)}")
         Path(args.push_file).write_text(json.dumps(push, ensure_ascii=False), encoding="utf-8")
-        publish = args.mode == "page" or page_changed(brief, env.get("PAGE_URL", ""))
-        print("Page changed; deploying." if publish else "Live page already up to date; skipping deploy.")
-        set_output(env, publish=str(publish).lower())
+        if args.mode == "page":
+            publish = True
+        else:
+            publish = live is None or live_content_key(live) != content_key(brief)
+            print("Page changed; deploying." if publish else "Live page already up to date; skipping deploy.")
+        set_output(env, publish=str(publish).lower(), send=str(will_send).lower(),
+                   already_sent=str(pushed_on == now.date().isoformat() and not will_send).lower())
     elif args.mode == "push":
         return send(push, env)
     return 0
