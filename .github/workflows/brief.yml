@@ -129,6 +129,9 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           PAGE_DEPLOYED: ${{ needs.deploy.result == 'success' }}
+          # Private sheet (on-call, blockers). Read only here, never logged or saved.
+          GOOGLE_SA_KEY: ${{ secrets.GOOGLE_SA_KEY }}
+          PRIVATE_SHEET_ID: ${{ secrets.PRIVATE_SHEET_ID }}
         run: python -m brief --mode send --push-file push.json
 
   # Dead-man check: tell Healthchecks.io that today's brief went out. If no ping

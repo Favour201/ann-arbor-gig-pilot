@@ -3,7 +3,8 @@
 Pure functions (no network), so every honesty rule here is unit-tested:
 - unknown weather stays unknown; a missing city never yields an all-clear;
 - kickoff TBD stays TBD; no split shift without a published kickoff;
-- the skip flag is a suggestion, and only fires on red weather (on-call in M2).
+- the skip flag is a suggestion, and only fires on red weather. On-call and
+  blockers are private and added to the push only (brief/private.py).
 """
 from . import weather_outlook
 from .config import BASE_LABEL, DRIVING_WEEKDAYS, HORIZON_DAYS, OFFER_TARGET_DOLLARS_PER_MILE
