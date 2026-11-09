@@ -9,7 +9,7 @@ Pure functions (no network), so every honesty rule here is unit-tested:
 from . import weather_outlook
 from .config import BASE_LABEL, DRIVING_WEEKDAYS, HORIZON_DAYS, OFFER_TARGET_DOLLARS_PER_MILE
 from .events import event_impact, events_for_day, horizon
-from .plan import event_time_label, generate_schedule, roadmap_title
+from .plan import clock, event_time_label, generate_schedule, is_confirmed_michigan_home_game, is_night_game, roadmap_title
 from .weather import weather_for_day
 
 DRIVING_APPS = ("Delivery", "XL / Comfort")
@@ -64,7 +64,7 @@ def build_day(day, now, events_data, forecast):
         "date": day, "driving_day": driving, "events": events,
         "event_coverage": day_events["coverage"],
         "events_complete": all(c["verified"] for c in day_events["coverage"]),
-        "windows": [], "weather": None, "skip": None, "game_day": None,
+        "windows": [], "weather": None, "skip": None, "game_day": None, "game": None,
         "kickoff_tbd": [e for e in events if e["time"] == "Kickoff TBD"],
         "offer_rule": OFFER_RULE if driving else None,
     }
@@ -76,8 +76,15 @@ def build_day(day, now, events_data, forecast):
     pregame = next((w for w in result["windows"] if w["phase"] == "pregame"), None)
     if pregame:
         result["game_day"] = pregame["basis"]
+        game = next(e for e in day_events["events"] if is_confirmed_michigan_home_game(e))
+        result["game"] = {"name": game["name"], "kickoff": clock(game["start"]), "night": is_night_game(game)}
 
-    scoped = weather_outlook.weather_for_work(weather_for_day(forecast, day), slots, day, now)
+    # Weather is sliced per calendar day, so a window past midnight (night-game
+    # post-game rides) is scoped to midnight; otherwise the after-midnight hours
+    # would read as missing data and turn a clear night into "unknown".
+    weather_slots = [{**s, "end_minute": min(s["end_minute"], 1440)} if s.get("end_minute") else s
+                     for s in slots]
+    scoped = weather_outlook.weather_for_work(weather_for_day(forecast, day), weather_slots, day, now)
     outlook = weather_outlook.summarize_weather_outlook(scoped)
     outlook["window_label"] = scoped["window_label"]
     result["weather"] = outlook

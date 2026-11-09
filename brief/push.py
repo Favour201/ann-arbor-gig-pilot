@@ -15,10 +15,25 @@ TIER_ORDER = ("CRITICAL IMPACT", "YPSI GAME DAY", "INDOOR ARENA", "PERFORMING AR
 
 def _short_time(window_time):
     """'6:00 PM – 8:30 PM' -> '6:00–8:30 PM'; leaves other labels alone."""
+    window_time = window_time.replace(" (+1 day)", "")
     parts = window_time.split(" – ")
     if len(parts) == 2 and parts[0][-2:] == parts[1][-2:]:
         return f"{parts[0][:-3]}–{parts[1]}"
     return window_time.replace(" – ", "–")
+
+
+GAME_PHASE_LABEL = {"pregame": "drive", "ingame": "deliveries", "rest": "rest",
+                    "postgame": "post-game rides"}
+
+
+def game_parts(day):
+    parts = []
+    for w in day["windows"]:
+        if w["phase"] == "return":
+            parts.append(f"optional return {w['time'].replace(' onward', '+')}")
+        elif w["phase"] in GAME_PHASE_LABEL:
+            parts.append(f"{GAME_PHASE_LABEL[w['phase']]} {_short_time(w['time'])}")
+    return parts
 
 
 def plan_line(day):
@@ -26,19 +41,41 @@ def plan_line(day):
     if not day["driving_day"]:
         return "Not a driving day."
     if day["game_day"]:
-        parts = []
-        for w in windows:
-            if w["kind"] == "rest":
-                parts.append(f"rest {_short_time(w['time'])}")
-            elif w["phase"] == "pregame":
-                parts.append(f"drive {_short_time(w['time'])}")
-            else:
-                parts.append(f"optional return {w['time'].replace(' onward', '+')}")
-        return "Game day: " + " · ".join(parts)
+        kickoff = f" ({day['game']['kickoff']} kickoff)" if day.get("game") else ""
+        line = f"Game day{kickoff}: " + " · ".join(game_parts(day))
+        return line + (" (game end estimated)" if (day.get("game") or {}).get("night") else "")
     fixed = [w for w in windows if w["kind"] == "drive" and not w["optional"]]
     optional = any(w["optional"] for w in windows)
     text = "Delivery " + ", ".join(_short_time(w["time"]) for w in fixed)
     return text + (", optional after" if optional else "")
+
+
+def _is_big_game(e):
+    """Michigan home football (published or TBD) and EMU home football."""
+    name = e["name"].lower()
+    return e["tier"] == "CRITICAL IMPACT" or (e["tier"] == "YPSI GAME DAY" and "football" in name)
+
+
+def _game_ahead(day):
+    dow = day["date"].strftime("%a")
+    if day.get("game"):
+        return f"{dow} {day['game']['name']} {day['game']['kickoff']}: " + ", ".join(game_parts(day))
+    games = [e for e in day["events"] if _is_big_game(e)]
+    return "; ".join(f"{dow} {e['name']}, " + ("kickoff TBD (plan once it's published)"
+                                               if e["time"] == "Kickoff TBD" else e["time"])
+                     for e in games[:2])
+
+
+def ahead_line(today, later_days):
+    """Thursday: heads-up for Fri–Sun big games. Other driving days: tomorrow only."""
+    if not today["driving_day"]:
+        return None
+    scan = later_days[:3] if today["date"].weekday() == 3 else later_days[:1]
+    found = [text for d in scan if d["driving_day"] and (text := _game_ahead(d))]
+    if not found:
+        return None
+    label = "This weekend" if today["date"].weekday() == 3 else "Tomorrow"
+    return f"{label}: " + " | ".join(found)
 
 
 def weather_line(day):
@@ -96,14 +133,19 @@ def events_line(day):
     return f"Events: {shown}{more}{unverified}"
 
 
-def compose_push(day, page_url=""):
-    """Return dict(title, message, priority, tags, click) for ntfy."""
+def compose_push(day, page_url="", later_days=()):
+    """Return dict(title, message, priority, tags, click, date) for ntfy.
+
+    Line order is priority order; the tail is cut first when over MAX_LINES.
+    """
     lines = []
     if day["skip"]:
         lines.append("⚠ " + day["skip"])
     lines.append(plan_line(day))
     if (w := weather_line(day)):
         lines.append(w)
+    if (a := ahead_line(day, list(later_days))):
+        lines.append(a)
     lines.append(events_line(day))
     if day["driving_day"]:
         lines.append(f"Offer rule: ${OFFER_TARGET_DOLLARS_PER_MILE:g}+ per est. total mile")

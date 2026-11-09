@@ -55,7 +55,8 @@ def test_saturday_330_game_recommends_drive_rest_and_return():
     slots = generate_schedule([game], BASE_LABEL, 5)
     assert [x["time"] for x in slots] == ["12:30 PM – 2:45 PM", "2:45 PM – 5:30 PM", "5:30 PM onward"]
     assert [roadmap_title(x) for x in slots] == [
-        "Pregame · delivery first", "Head home & recharge", "Optional return · delivery first"]
+        "Pregame · best offers", "Head home & recharge", "Optional return · delivery first"]
+    assert "rides first" in slots[0]["action"] and "UberX on only then" in slots[0]["action"]
     assert [x["app"] for x in slots] == ["Delivery", "Break / Reset", "Delivery"]
     assert "$3 per estimated total mile" in slots[2]["action"]
     assert "no surge is guaranteed" in slots[2]["action"].lower()
@@ -111,3 +112,28 @@ def test_no_street_address_in_any_public_plan_text():
     texts = [s["action"] for wd in range(7) for s in generate_schedule([], BASE_LABEL, wd)]
     texts += [s["action"] for s in generate_schedule([game], BASE_LABEL, 5)]
     assert texts and all("Arbor Circle" not in t and "2100" not in t for t in texts)
+
+
+def test_night_kickoff_uses_the_nov_7_shape_with_estimated_end():
+    game = ev.event_record("Michigan Football vs. Michigan State", "Michigan Stadium",
+                           "2026-11-07T19:30:00-05:00", None, "U-M Athletics")
+    slots = generate_schedule([game], BASE_LABEL, 5)
+    assert [(s["time"], s.get("plan_phase")) for s in slots] == [
+        ("3:30 PM – 7:30 PM", "pregame"), ("7:30 PM – 9:30 PM", "ingame"),
+        ("9:30 PM – 10:45 PM", "rest"), ("10:45 PM – 12:45 AM (+1 day)", "postgame")]
+    assert [s["app"] for s in slots] == ["Delivery", "Delivery", "Break / Reset", "XL / Comfort"]
+    assert slots[3]["end_minute"] == 24 * 60 + 45
+    assert "estimate" in slots[2]["action"] and "11:00 PM" in slots[2]["action"]
+    assert "End time is an estimate" in slots[0]["plan_basis"]
+    assert "away from the stadium" in slots[1]["action"]
+    for s in slots:  # honesty: no demand/surge/profit claims, only "no surge is guaranteed"
+        text = s["action"].lower().replace("no surge is guaranteed", "")
+        assert not any(word in text for word in ("surge", "profit", "guarantee"))
+
+
+def test_noon_and_330_kickoffs_keep_the_day_split():
+    noon = ev.event_record("Michigan Football", "Michigan Stadium", "2026-09-05T12:00:00-04:00", None, "T")
+    assert [s["time"] for s in generate_schedule([noon], BASE_LABEL, 5)] == [
+        "9:00 AM – 11:15 AM", "11:15 AM – 3:00 PM", "3:00 PM onward"]
+    five = ev.event_record("Michigan Football", "Michigan Stadium", "2026-09-05T17:00:00-04:00", None, "T")
+    assert generate_schedule([five], BASE_LABEL, 5)[0]["time"] == "1:00 PM – 5:00 PM"  # 5 PM counts as night
