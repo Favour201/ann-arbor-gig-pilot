@@ -122,7 +122,7 @@ def main(argv=None, env=os.environ):
     events_data = fetch_events(horizon(now.date(), HORIZON_DAYS), env.get("EVENT_FEEDS_JSON", "[]"))
     forecast = fetch_forecast()
     brief = build_brief(now, events_data, forecast)
-    push = compose_push(brief["days"][0], env.get("PAGE_URL", ""))
+    push = compose_push(brief["days"][0], env.get("PAGE_URL", ""), brief["days"][1:])
 
     print(render_text(brief))
     print()

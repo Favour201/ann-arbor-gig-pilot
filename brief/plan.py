@@ -14,6 +14,14 @@ def offer_target_guidance():
             "per estimated total mile, counting pickup and likely unpaid miles. "
             "If offers fall short, waiting or heading home is valid.")
 
+NIGHT_KICKOFF_HOUR = 17          # published kickoff at/after 5 PM -> night-game shape
+GAME_LENGTH = timedelta(hours=3.5)  # estimated end = kickoff + 3.5 h (never published)
+
+PREGAME_OFFERS = ("Take the best offers that clear your offer rule: Uber Eats / DoorDash "
+                  "deliveries or Comfort/XL rides. If a ride promo is running, rides first "
+                  "(UberX on only then).")
+
+
 def clock(dt):
     return dt.strftime("%I:%M %p").lstrip("0")
 
@@ -45,6 +53,8 @@ def game_day_blocks(event, base_camp, *, stop_buffer_minutes=45, return_after_ho
     if stop_buffer_minutes not in (30, 45, 60) or not 1 <= return_after_hours <= 4:
         raise ValueError("Unsupported game-day planning preferences")
     kickoff = event["start"]
+    if kickoff.hour >= NIGHT_KICKOFF_HOUR:
+        return night_game_blocks(event, base_camp)
     pre_start = kickoff - timedelta(hours=3)
     pre_end = kickoff - timedelta(minutes=stop_buffer_minutes)
     return_at = max(kickoff + timedelta(hours=return_after_hours),
@@ -60,10 +70,9 @@ def game_day_blocks(event, base_camp, *, stop_buffer_minutes=45, return_after_ho
     blocks = [
         {"time": window(pre_start, pre_end), "app": "Delivery",
          "plan_phase": "pregame",
-         "title": "Pregame · delivery first",
+         "title": "Pregame · best offers",
          "action": f"Suggested start from {base_camp}: drive roughly three hours before the "
-                   f"{clock(kickoff)} Michigan kickoff. Focus on Uber Eats or DoorDash "
-                   "deliveries; keep Uber Comfort/XL available only for worthwhile rides. "
+                   f"{clock(kickoff)} Michigan kickoff. {PREGAME_OFFERS} "
                    f"Finish around {clock(pre_end)} and avoid stadium approaches as arrivals peak. "
                    f"Traffic: {signal['traffic']} " + offer_target_guidance() + " "
                    "Check real offers before leaving; event crowds do not guarantee orders.",
@@ -89,6 +98,52 @@ def game_day_blocks(event, base_camp, *, stop_buffer_minutes=45, return_after_ho
                        "no surge is guaranteed.",
              "_minute": minute(return_at), "_end_minute": minute(return_end)})
     return blocks
+
+def is_night_game(event):
+    return is_confirmed_michigan_home_game(event) and event["start"].hour >= NIGHT_KICKOFF_HOUR
+
+
+def night_game_blocks(event, base_camp):
+    """Night kickoff (Nov 7, 2026 MSU 7:30 PM as the model).
+
+    Pregame offers until kickoff; deliveries away from the stadium during the
+    game (it's dinner rush); rest ending 15 min before the ESTIMATED end
+    (kickoff + 3.5 h, labeled as an estimate); post-game rides for ~2 h.
+    """
+    kickoff = event["start"]
+    pre_start = kickoff - timedelta(hours=4)
+    est_end = kickoff + GAME_LENGTH
+    rest_start, rest_end = est_end - timedelta(minutes=90), est_end - timedelta(minutes=15)
+    post_end = rest_end + timedelta(hours=2)
+
+    def minute(dt):
+        return (dt.date() - kickoff.date()).days * 1440 + dt.hour * 60 + dt.minute
+
+    signal = event_impact(event)
+    estimate = (f"Game end is an estimate (~{clock(est_end)}, kickoff + 3.5 h), not published; "
+                "check the score before heading back out.")
+    return [
+        {"time": window(pre_start, kickoff), "app": "Delivery", "plan_phase": "pregame",
+         "title": "Pregame · best offers",
+         "action": f"Suggested start from {base_camp} four hours before the {clock(kickoff)} "
+                   f"Michigan kickoff. {PREGAME_OFFERS} Avoid stadium approaches as arrivals peak. "
+                   f"Traffic: {signal['traffic']} " + offer_target_guidance(),
+         "_minute": minute(pre_start), "_end_minute": minute(kickoff)},
+        {"time": window(kickoff, rest_start), "app": "Delivery", "plan_phase": "ingame",
+         "title": "During the game · deliveries away from the stadium",
+         "action": "The game overlaps dinner rush. Take Uber Eats / DoorDash deliveries on loops "
+                   "away from the stadium and its approaches. " + offer_target_guidance(),
+         "_minute": minute(kickoff), "_end_minute": minute(rest_start)},
+        {"time": window(rest_start, rest_end), "app": "Break / Reset", "plan_phase": "rest",
+         "title": "Rest before the exodus",
+         "action": f"Eat or rest away from stadium traffic; be ready by {clock(rest_end)}. " + estimate,
+         "_minute": minute(rest_start), "_end_minute": minute(rest_end)},
+        {"time": window(rest_end, post_end), "app": "XL / Comfort", "plan_phase": "postgame",
+         "title": "Post-game · rides",
+         "action": "Rides for the exodus from the app's pickup zone or downtown, not the stadium curb. "
+                   + estimate + " " + offer_target_guidance() + " No surge is guaranteed.",
+         "_minute": minute(rest_end), "_end_minute": minute(post_end)},
+    ]
 
 def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True, include_local=True,
                       smart_game_day=True, stop_buffer_minutes=45, return_after_hours=2.0):
@@ -182,7 +237,8 @@ def generate_schedule(events, base_camp, day_of_week, *, include_event_cues=True
         if "plan_phase" in slot:
             slot["plan_basis"] = (
                 f"Adjusted for confirmed Michigan kickoff ({clock(featured_game['start'])}). "
-                "Suggested timing, not measured demand."
+                + ("End time is an estimate (kickoff + 3.5 h). " if is_night_game(featured_game) else "")
+                + "Suggested timing, not measured demand."
                 if featured_game is not None else
                 "Usual dinner plan. Scheduled timing, not measured demand.")
     timeline.sort(key=lambda item: (item["_minute"] is None,

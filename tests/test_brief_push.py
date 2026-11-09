@@ -41,7 +41,9 @@ def test_game_day_line_shows_split_and_ranks_football_first():
                                "2026-11-07T19:30:00-05:00", None, "Michigan Athletics")
     school = ev.event_record("Pioneer • Hockey", "Pioneer High School", "2026-11-07T17:00:00-05:00", None, "P")
     lines = check_shape(compose_push(day_for(date(2026, 11, 7), [school, football])))
-    assert lines[0] == "Game day: drive 4:30–6:45 PM · rest 6:45–9:30 PM · optional return 9:30 PM+"
+    assert lines[0] == ("Game day (7:30 PM kickoff): drive 3:30–7:30 PM · deliveries 7:30–9:30 PM · "
+                        "rest 9:30–10:45 PM · post-game rides 10:45 PM–12:45 AM (game end estimated)")
+    assert lines[1].startswith("Weather: ☀️ Low impact")  # post-midnight hours don't blank the weather
     assert lines[2].startswith("Events: Michigan Football vs. Michigan State 7:30 PM (Michigan Stadium); Pioneer")
 
 
@@ -121,3 +123,59 @@ def test_main_push_mode_reports_missing_topic(monkeypatch, capsys):
     assert "--- push: Thu Nov 5 · Gig brief" in capsys.readouterr().out
     assert entry.main(["--mode", "push", "--now", "2026-11-05T15:15"], env={}) == 1
     assert "NTFY_TOPIC is missing" in capsys.readouterr().err
+
+
+# ------------------------------------------------------------- look-ahead line
+UCLA = ev.event_record("Michigan Football vs. UCLA", "Michigan Stadium", "2026-11-21T15:30:00-05:00", None, "M")
+UCLA_TBD = ev.event_record("Michigan Football vs. UCLA", "Michigan Stadium", "2026-11-21", None, "M", all_day=True)
+
+
+def week(sat_events=()):
+    return [day_for(date(2026, 11, d), sat_events if d == 21 else ()) for d in range(19, 24)]
+
+
+def test_thursday_flags_a_weekend_home_game_with_its_split():
+    thu, *later = week([UCLA])
+    lines = check_shape(compose_push(thu, "", later))
+    assert ("This weekend: Sat Michigan Football vs. UCLA 3:30 PM: drive 12:30–2:45 PM, "
+            "rest 2:45–5:30 PM, optional return 5:30 PM+") in lines
+
+
+def test_thursday_keeps_kickoff_tbd_as_tbd():
+    thu, *later = week([UCLA_TBD])
+    msg = compose_push(thu, "", later)["message"]
+    assert "This weekend: Sat Michigan Football vs. UCLA, kickoff TBD (plan once it's published)" in msg
+    assert "12:00" not in msg  # no invented time
+
+
+def test_friday_carries_tomorrows_plan_saturday_does_not_repeat_it():
+    _, fri, sat, sun, mon = week([UCLA])
+    assert compose_push(fri, "", [sat, sun, mon])["message"].count("Tomorrow: Sat Michigan Football vs. UCLA") == 1
+    assert "Tomorrow" not in compose_push(sat, "", [sun, mon])["message"]
+    assert "Tomorrow" not in compose_push(sun, "", [mon])["message"]  # Monday isn't a driving day
+
+
+def test_emu_football_counts_other_emu_sports_do_not():
+    emu = ev.event_record("EMU Football vs. Toledo", "Rynearson Stadium", "2026-11-21T14:00:00-05:00", None, "EMU",
+                          tier="YPSI GAME DAY")
+    hoops = ev.event_record("EMU Mens Basketball vs. X", "George Gervin GameAbove Center",
+                            "2026-11-21T14:00:00-05:00", None, "EMU", tier="YPSI GAME DAY")
+    thu, *later = week([emu, hoops])
+    msg = compose_push(thu, "", later)["message"]
+    assert "This weekend: Sat EMU Football vs. Toledo, 2:00 PM" in msg and "Basketball" not in msg
+
+
+def test_no_look_ahead_on_non_driving_days_or_quiet_weekends():
+    thu, *later = week()
+    assert "This weekend" not in compose_push(thu, "", later)["message"]
+    mon = day_for(date(2026, 11, 16))
+    assert "Tomorrow" not in compose_push(mon, "", [day_for(date(2026, 11, 17))])["message"]
+
+
+def test_look_ahead_and_oncall_fit_in_five_lines():
+    from brief.private import ONCALL_LINE
+    from brief.push import add_private_lines
+    thu, *later = week([UCLA])
+    lines = check_shape(add_private_lines(compose_push(thu, "", later), [ONCALL_LINE]))
+    assert ONCALL_LINE in lines and any(line.startswith("This weekend:") for line in lines)
+    assert not any(line.startswith("Offer rule:") for line in lines)  # first to go
