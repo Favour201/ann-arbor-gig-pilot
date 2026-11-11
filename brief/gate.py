@@ -27,6 +27,12 @@ MANUAL_MODES = ("dry-run", "page", "push")
 # API at 3:15 PM New York time. Treated like the GitHub cron push: driving
 # days only, and guarded against duplicates and late runs.
 EXTERNAL_MODE = "scheduled-push"
+# Sent by cron-job.org on Saturdays at 8:00 AM. A guarded push in the
+# "morning" slot: it only goes out if today has a published Michigan home
+# kickoff (checked in the build, which has the events), and its once-a-day
+# marker is separate, so it never blocks the 3:15 brief.
+GAMEDAY_MODE = "gameday-push"
+GAMEDAY_WEEKDAY = 5  # Saturday
 
 
 def utc_offset_hours(now):
@@ -36,6 +42,10 @@ def utc_offset_hours(now):
 def decide(event_name, schedule="", input_mode="", now=None):
     """Return (mode, reason). mode is one of push, refresh, page, dry-run, skip."""
     now = (now or datetime.now(TZ)).astimezone(TZ)
+    if event_name == "workflow_dispatch" and input_mode == GAMEDAY_MODE:
+        if now.weekday() != GAMEDAY_WEEKDAY:
+            return "skip", "game-day morning trigger on a day that isn't Saturday"
+        return "push", "8 AM game-day push (external scheduler; sends only with a published home kickoff)"
     if event_name == "workflow_dispatch" and input_mode == EXTERNAL_MODE:
         if now.weekday() not in DRIVING_WEEKDAYS:
             return "skip", "external trigger on a non-driving day"
@@ -61,17 +71,23 @@ def decide(event_name, schedule="", input_mode="", now=None):
 
 def is_guarded(event_name, input_mode):
     """Automatic pushes (GitHub cron or external scheduler) are guarded; your own manual push isn't."""
-    return event_name == "schedule" or input_mode == EXTERNAL_MODE
+    return event_name == "schedule" or input_mode in (EXTERNAL_MODE, GAMEDAY_MODE)
+
+
+def slot_for(input_mode):
+    """Which once-a-day marker a push uses: the 8 AM game-day push or the 3:15 brief."""
+    return "morning" if input_mode == GAMEDAY_MODE else "afternoon"
 
 
 def main(env=os.environ, now=None):
     event, mode_in = env.get("EVENT_NAME", ""), env.get("INPUT_MODE", "")
     mode, reason = decide(event, env.get("SCHEDULE", ""), mode_in, now=now)
     guard = mode == "push" and is_guarded(event, mode_in)
-    print(f"mode={mode} guard={str(guard).lower()} ({reason})")
+    slot = slot_for(mode_in)
+    print(f"mode={mode} guard={str(guard).lower()} slot={slot} ({reason})")
     if env.get("GITHUB_OUTPUT"):
         with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-            out.write(f"mode={mode}\nguard={str(guard).lower()}\n")
+            out.write(f"mode={mode}\nguard={str(guard).lower()}\nslot={slot}\n")
     return 0
 
 

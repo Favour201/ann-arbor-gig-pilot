@@ -30,10 +30,10 @@ def test_gate_outputs_guard(tmp_path):
     out = tmp_path / "o"
     env = {"EVENT_NAME": "workflow_dispatch", "INPUT_MODE": "scheduled-push", "GITHUB_OUTPUT": str(out)}
     gate.main(env, now=ny(2026, 11, 6, 15, 15))  # a Friday; don't depend on today's date
-    assert out.read_text().splitlines() == ["mode=push", "guard=true"]
+    assert out.read_text().splitlines() == ["mode=push", "guard=true", "slot=afternoon"]
     out.write_text("")
     gate.main(env, now=ny(2026, 11, 9, 15, 15))  # a Monday: external trigger skips, no guard
-    assert out.read_text().splitlines() == ["mode=skip", "guard=false"]
+    assert out.read_text().splitlines() == ["mode=skip", "guard=false", "slot=afternoon"]
 
 
 # ---------------------------------------------------------------- the guards
@@ -124,3 +124,73 @@ def test_short_name_leaves_other_names_alone():
     assert short_name("Pioneer • Swimming & Diving (Girls V) • SEC Championship @ Skyline (A)") == \
         "Pioneer girls swimming & diving vs SEC Championship @ Skyline"
     assert short_venue("Rackham Auditorium, Ann Arbor") == "Rackham Auditorium"
+
+
+# ---------------------------------------------------- Saturday 8 AM game-day push
+UCLA = ev.event_record("Michigan Football vs. UCLA", "Michigan Stadium", "2026-11-21T15:30:00-05:00", None, "M")
+NOON = ev.event_record("Michigan Football vs. Rival", "Michigan Stadium", "2026-11-21T12:00:00-05:00", None, "M")
+UCLA_TBD = ev.event_record("Michigan Football vs. UCLA", "Michigan Stadium", "2026-11-21", None, "M", all_day=True)
+
+
+def test_gameday_mode_is_a_guarded_morning_push_on_saturdays_only(tmp_path):
+    assert gate.decide("workflow_dispatch", "", "gameday-push", now=ny(2026, 11, 21, 8, 0))[0] == "push"
+    assert gate.decide("workflow_dispatch", "", "gameday-push", now=ny(2026, 11, 22, 8, 0))[0] == "skip"
+    assert gate.is_guarded("workflow_dispatch", "gameday-push")
+    out = tmp_path / "o"
+    gate.main({"EVENT_NAME": "workflow_dispatch", "INPUT_MODE": "gameday-push", "GITHUB_OUTPUT": str(out)},
+              now=ny(2026, 11, 21, 8, 0))
+    assert out.read_text().splitlines() == ["mode=push", "guard=true", "slot=morning"]
+
+
+def test_morning_push_needs_a_published_home_kickoff():
+    from brief.__main__ import should_send
+    at8 = ny(2026, 11, 21, 8, 0)
+    assert should_send(brief_at(at8, [UCLA]), at8, "", "morning") == (True, "on time")
+    assert should_send(brief_at(at8, [UCLA_TBD]), at8, "", "morning") == (
+        False, "no published Michigan home kickoff today")  # TBD stays TBD: no plan to push
+    assert should_send(brief_at(at8), at8, "", "morning")[0] is False
+
+
+def test_morning_push_is_too_late_once_pregame_starts():
+    from brief.__main__ import should_send
+    late = ny(2026, 11, 21, 9, 5)
+    sent, why = should_send(brief_at(late, [NOON]), late, "", "morning")  # noon game: drive from 9:00 AM
+    assert sent is False and why == "too late: it's past 9:00 AM, when driving starts"
+    assert should_send(brief_at(late, [UCLA]), late, "", "morning")[0] is True  # 3:30 game: drive from 12:30
+
+
+def test_morning_and_afternoon_markers_are_independent(tmp_path, monkeypatch):
+    import brief.__main__ as entry
+    monkeypatch.setattr(entry, "fetch_events", lambda days, extra: events_data([UCLA]))
+    monkeypatch.setattr(entry, "fetch_forecast", lambda: forecast(all_days()))
+    sat = brief_at(ny(2026, 11, 21, 8, 0), [UCLA])
+    pages = {"live": render_page(sat, "2026-11-20", "")}
+    monkeypatch.setattr(entry, "fetch_live_page", lambda url: pages["live"])
+
+    def run(now, slot):
+        out = tmp_path / "gh"
+        out.write_text("")
+        site = tmp_path / slot
+        entry.main(["--mode", "page", "--now", now, "--out", str(site), "--push-file", str(tmp_path / "p.json"),
+                    "--push-run", "--guard", "--slot", slot],
+                   env={"PAGE_URL": "https://x.github.io/", "GITHUB_OUTPUT": str(out)})
+        pages["live"] = (site / "index.html").read_text()
+        return dict(line.split("=", 1) for line in out.read_text().splitlines())
+
+    assert run("2026-11-21T08:00", "morning")["send"] == "true"
+    assert live_pushed_on(pages["live"], "morning") == "2026-11-21"
+    assert live_pushed_on(pages["live"]) == "2026-11-20"           # afternoon marker untouched
+    assert run("2026-11-21T08:05", "morning")["send"] == "false"   # once per morning
+    assert run("2026-11-21T15:15", "afternoon")["send"] == "true"  # the 3:15 brief still goes out
+    assert live_pushed_on(pages["live"], "morning") == "2026-11-21"  # and keeps the morning marker
+
+
+def test_workflow_wires_the_gameday_mode_and_its_own_heartbeat():
+    import pathlib
+    import yaml
+    wf = yaml.safe_load(pathlib.Path(".github/workflows/brief.yml").read_text())
+    on = wf.get("on") or wf[True]
+    assert "gameday-push" in on["workflow_dispatch"]["inputs"]["mode"]["options"]
+    assert "HC_PING_URL_GAMEDAY" in str(wf["jobs"]["heartbeat-gameday"])
+    assert "slot != 'morning'" in wf["jobs"]["heartbeat"]["if"]
+    assert "gameday-push" in wf["jobs"]["alert"]["if"]
