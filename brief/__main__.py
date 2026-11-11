@@ -38,10 +38,10 @@ def render_push(push):
     return f"--- push: {push['title']} (priority {push['priority']})\n{push['message']}"
 
 
-def write_site(brief, out_dir, pushed_on=""):
+def write_site(brief, out_dir, pushed_on="", morning_on=""):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "index.html").write_text(render_page(brief, pushed_on), encoding="utf-8")
+    (out / "index.html").write_text(render_page(brief, pushed_on, morning_on), encoding="utf-8")
     (out / ".nojekyll").write_text("", encoding="utf-8")  # serve files as-is
     return out / "index.html"
 
@@ -62,15 +62,31 @@ def fetch_live_page(page_url):
         return None
 
 
-def should_send(brief, now, already_pushed_on):
-    """Guard for scheduled pushes: once per day, and not after the window has started."""
+def _clock(minute):
+    return f"{minute // 60 % 12 or 12}:{minute % 60:02d} {'PM' if minute % 1440 >= 720 else 'AM'}"
+
+
+def should_send(brief, now, already_pushed_on, slot="afternoon"):
+    """Guard for automatic pushes: once per day per slot, and not after the window has started.
+
+    morning (8 AM game-day push): only with a published Michigan home kickoff
+    today; too late once the first drive window has started.
+    afternoon (3:15 brief): first window at/after 3 PM, never before 4 PM.
+    """
     today = brief["days"][0]
     if already_pushed_on == today["date"].isoformat():
-        return False, "today's brief was already sent"
-    cutoff = push_cutoff_minute(today)
+        return False, "today's game-day push was already sent" if slot == "morning" else "today's brief was already sent"
+    if slot == "morning":
+        if not today.get("game"):
+            return False, "no published Michigan home kickoff today"
+        starts = [w["start_minute"] for w in today["windows"]
+                  if w["kind"] == "drive" and w.get("start_minute") is not None]
+        cutoff = min(starts)
+    else:
+        cutoff = push_cutoff_minute(today)
     minute = now.hour * 60 + now.minute
     if minute >= cutoff:
-        return False, f"too late: it's past {cutoff // 60 % 12 or 12}:{cutoff % 60:02d} PM, when driving starts"
+        return False, f"too late: it's past {_clock(cutoff)}, when driving starts"
     return True, "on time"
 
 
@@ -110,6 +126,8 @@ def main(argv=None, env=os.environ):
     parser.add_argument("--push-run", action="store_true", help="This page build goes with a push")
     parser.add_argument("--guard", action="store_true",
                         help="Scheduled push: skip if already sent today or too late")
+    parser.add_argument("--slot", choices=("afternoon", "morning"), default="afternoon",
+                        help="Which once-a-day marker a guarded push uses (morning = 8 AM game-day push)")
     args = parser.parse_args(argv)
 
     if args.mode == "send":
@@ -130,14 +148,16 @@ def main(argv=None, env=os.environ):
         print(render_push(push))  # send() prints it in push mode
     if args.mode in ("page", "refresh"):
         live = fetch_live_page(env.get("PAGE_URL", ""))
-        pushed_on = live_pushed_on(live)
+        marks = {"afternoon": live_pushed_on(live), "morning": live_pushed_on(live, "morning")}
         will_send, reason = False, "not a push run"
         if args.push_run:
-            will_send, reason = should_send(brief, now, pushed_on) if args.guard else (True, "manual push")
+            will_send, reason = (should_send(brief, now, marks[args.slot], args.slot) if args.guard
+                                 else (True, "manual push"))
             if will_send:
-                pushed_on = now.date().isoformat()
-        print(f"Push: {'send' if will_send else 'skip'} ({reason})")
-        print(f"Wrote {write_site(brief, args.out, pushed_on)}")
+                marks[args.slot] = now.date().isoformat()
+        pushed_on = marks[args.slot]
+        print(f"Push ({args.slot}): {'send' if will_send else 'skip'} ({reason})")
+        print(f"Wrote {write_site(brief, args.out, marks['afternoon'], marks['morning'])}")
         Path(args.push_file).write_text(json.dumps(push, ensure_ascii=False), encoding="utf-8")
         if args.mode == "page":
             publish = True
