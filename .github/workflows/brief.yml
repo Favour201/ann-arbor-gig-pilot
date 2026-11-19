@@ -7,6 +7,9 @@ name: Driving brief
 #   GitHub's scheduler can run hours late, so the 3:15 push is also started on
 #   time by cron-job.org through the workflow_dispatch API (mode scheduled-push).
 #   Automatic pushes are guarded: at most one per day, never after driving starts.
+#   Saturdays 8 AM: cron-job.org starts a game-day push (mode gameday-push). It
+#   sends only if today has a published Michigan home kickoff, and has its own
+#   once-a-day marker so it never blocks the 3:15 brief.
 # Manual (Run workflow):
 #   dry-run prints only; page deploys the site; push deploys and always notifies.
 on:
@@ -19,7 +22,7 @@ on:
       mode:
         description: "dry-run prints only; page deploys the site; push deploys and notifies"
         type: choice
-        options: [dry-run, page, push, scheduled-push]
+        options: [dry-run, page, push, scheduled-push, gameday-push]
         default: dry-run
       now:
         description: "Optional 'now' override, e.g. 2026-11-07T15:15 (America/New_York)"
@@ -39,6 +42,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       mode: ${{ steps.gate.outputs.mode }}
+      slot: ${{ steps.gate.outputs.slot }}
       publish: ${{ steps.build.outputs.publish }}
       send: ${{ steps.build.outputs.send }}
       already_sent: ${{ steps.build.outputs.already_sent }}
@@ -70,9 +74,10 @@ jobs:
           NOW: ${{ inputs.now }}
           PUSH_RUN: ${{ steps.gate.outputs.mode == 'push' }}
           GUARD: ${{ steps.gate.outputs.guard }}
+          SLOT: ${{ steps.gate.outputs.slot }}
           PAGE_URL: ${{ steps.pages.outputs.base_url && format('{0}/', steps.pages.outputs.base_url) || '' }}
         run: |
-          args=(--mode "$MODE" --out site --push-file push.json)
+          args=(--mode "$MODE" --out site --push-file push.json --slot "${SLOT:-afternoon}")
           if [ -n "$NOW" ]; then args+=(--now "$NOW"); fi
           if [ "$PUSH_RUN" = "true" ]; then args+=(--push-run); fi
           if [ "$GUARD" = "true" ]; then args+=(--guard); fi
@@ -139,7 +144,7 @@ jobs:
   heartbeat:
     needs: [build, notify]
     if: >-
-      always() && needs.build.outputs.mode == 'push' &&
+      always() && needs.build.outputs.mode == 'push' && needs.build.outputs.slot != 'morning' &&
       (needs.notify.result == 'success' || needs.build.outputs.already_sent == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -149,6 +154,25 @@ jobs:
           HC_PING_URL: ${{ secrets.HC_PING_URL }}
         run: |
           if [ -z "$HC_PING_URL" ]; then echo "HC_PING_URL not set; skipping."; exit 0; fi
+          curl -fsS -m 10 --retry 3 -o /dev/null "$HC_PING_URL" && echo "Heartbeat sent."
+
+  # Saturday 8 AM game-day run: ping a second Healthchecks check on every run
+  # that worked, whether it pushed (home game) or skipped (no game). This check
+  # watches the scheduler; the 3:15 check watches the brief itself.
+  heartbeat-gameday:
+    needs: [build, notify]
+    if: >-
+      always() && needs.build.result == 'success' && needs.build.outputs.slot == 'morning' &&
+      needs.build.outputs.mode == 'push' &&
+      (needs.build.outputs.send != 'true' || needs.notify.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Healthchecks.io (game-day check)
+        env:
+          HC_PING_URL: ${{ secrets.HC_PING_URL_GAMEDAY }}
+        run: |
+          if [ -z "$HC_PING_URL" ]; then echo "HC_PING_URL_GAMEDAY not set; skipping."; exit 0; fi
           curl -fsS -m 10 --retry 3 -o /dev/null "$HC_PING_URL" && echo "Heartbeat sent."
 
   # If any job failed or timed out on a push run, say so instead of staying silent.
@@ -161,6 +185,7 @@ jobs:
     if: >-
       always() &&
       (needs.build.outputs.mode == 'push' || inputs.mode == 'push' || inputs.mode == 'scheduled-push' ||
+       inputs.mode == 'gameday-push' ||
        (github.event_name == 'schedule' && github.event.schedule != '40 10 * * *' &&
         needs.build.outputs.mode == '')) &&
       (needs.build.result != 'success' ||

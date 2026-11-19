@@ -67,8 +67,8 @@ def test_refresh_and_manual_modes():
 def test_gate_writes_github_output(tmp_path, capsys):
     out = tmp_path / "out"
     gate.main({"EVENT_NAME": "workflow_dispatch", "INPUT_MODE": "page", "GITHUB_OUTPUT": str(out)})
-    assert out.read_text() == "mode=page\nguard=false\n"
-    assert "mode=page guard=false (manual run)" in capsys.readouterr().out
+    assert out.read_text() == "mode=page\nguard=false\nslot=afternoon\n"
+    assert "mode=page guard=false slot=afternoon (manual run)" in capsys.readouterr().out
 
 
 # ------------------------------------------------------- refresh: changed?
