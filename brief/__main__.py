@@ -17,6 +17,7 @@ import sys
 from .config import HORIZON_DAYS, TZ
 from .daybrief import build_brief
 from .events import fetch_events, horizon
+from .mailer import EmailError, email_state, send_email
 from .notify import PushError, send_ntfy
 from . import private
 from .push import add_private_lines, compose_push
@@ -106,15 +107,47 @@ def with_private(push, env, load=None):
 
 
 def send(push, env, load=None):
+    """Deliver through ntfy and (if configured) email. Fails only if nothing got through.
+
+    A channel that fails is reported through the other one, so a broken channel
+    can't go quiet: ntfy trouble is noted in the email, email trouble gets a
+    short follow-up push.
+    """
     print(render_push(push))  # public part only; private lines are added after this
     push = with_private(push, env, load)
+    delivered = 0
+    ntfy_ok = False
+    notes = []
     try:
         send_ntfy(push, env.get("NTFY_TOPIC", ""))
+        ntfy_ok = True
+        delivered += 1
+        print("Push sent.")
     except PushError as exc:
         print(f"Push failed: {exc}", file=sys.stderr)
-        return 1
-    print("Push sent.")
-    return 0
+        notes.append(f"Phone push failed: {exc}")
+
+    if email_state(env) == "off":
+        print("Email: not configured.")
+    else:
+        try:
+            send_email(push, env, notes)
+            delivered += 1
+            print("Email sent.")
+        except EmailError as exc:
+            print(f"Email failed: {exc}", file=sys.stderr)
+            if ntfy_ok:
+                _report_email_failure(exc, env)
+    return 0 if delivered else 1
+
+
+def _report_email_failure(exc, env):
+    notice = {"title": "Gig brief: email copy failed", "message": str(exc),
+              "priority": 3, "tags": ["warning"], "click": ""}
+    try:
+        send_ntfy(notice, env.get("NTFY_TOPIC", ""))
+    except PushError:
+        pass  # already logged; nothing else to try
 
 
 def main(argv=None, env=os.environ):
