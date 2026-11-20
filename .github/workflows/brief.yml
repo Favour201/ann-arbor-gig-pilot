@@ -137,6 +137,11 @@ jobs:
           # Private sheet (on-call, blockers). Read only here, never logged or saved.
           GOOGLE_SA_KEY: ${{ secrets.GOOGLE_SA_KEY }}
           PRIVATE_SHEET_ID: ${{ secrets.PRIVATE_SHEET_ID }}
+          # Email copy of the brief (ntfy's iPhone app doesn't always alert).
+          # Not set = email off. Addresses and password are never logged.
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          BRIEF_EMAIL_TO: ${{ secrets.BRIEF_EMAIL_TO }}
         run: python -m brief --mode send --push-file push.json
 
   # Dead-man check: tell Healthchecks.io that today's brief went out. If no ping
